@@ -1,0 +1,164 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // bcrypt hash
+  name      String?
+  role      Role     @default(DISPATCHER)
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdShipments Shipment[] @relation("CreatedBy")
+  assignedDeliveries Delivery[] @relation("Driver")
+}
+
+enum Role {
+  ADMIN
+  DISPATCHER
+  DRIVER
+  CUSTOMER
+}
+
+model Truck {
+  id             String      @id @default(uuid())
+  registrationNo String      @unique
+  type           TruckType
+  capacityKg     Float
+  capacityM3     Float?
+  status         TruckStatus @default(AVAILABLE)
+  currentLocation Json?      // {lat, lng, lastUpdated}
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  routes    Route[]
+  deliveries Delivery[]
+}
+
+enum TruckType {
+  SMALL_VAN
+  CONTAINER_20FT
+  CONTAINER_32FT
+  FLATBED_TRAILER
+  REEFER
+}
+
+enum TruckStatus {
+  AVAILABLE
+  ASSIGNED
+  IN_TRANSIT
+  MAINTENANCE
+}
+
+model Shipment {
+  id                String         @id @default(uuid())
+  customerId        String
+  origin            Json           // {lat, lng, address, city, pincode?}
+  destination       Json
+  pickupStart       DateTime?
+  pickupEnd         DateTime?
+  deliveryDeadline  DateTime?
+  weightKg          Float
+  volumeM3          Float?
+  description       String?
+  requirements      Json?          // {hazardous, fragile, tempControlled, etc}
+
+  status            ShipmentStatus @default(PENDING)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  customer          User           @relation("CreatedBy", fields: [customerId], references: [id])
+  routes            Route[]
+  deliveries        Delivery[]
+  predictions       Prediction[]
+}
+
+enum ShipmentStatus {
+  PENDING
+  ASSIGNED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+  DELAYED
+}
+
+model Route {
+  id          String      @id @default(uuid())
+  shipmentId  String
+  truckId     String
+  distanceKm  Float?
+  durationMin Int?
+  polyline    String?     // encoded polyline
+  status      RouteStatus @default(PLANNED)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shipment    Shipment @relation(fields: [shipmentId], references: [id])
+  truck       Truck    @relation(fields: [truckId], references: [id])
+  delivery    Delivery?
+}
+
+enum RouteStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model Delivery {
+  id             String         @id @default(uuid())
+  shipmentId     String
+  routeId        String?        @unique
+  truckId        String
+  driverId       String?
+  status         DeliveryStatus @default(ASSIGNED)
+  pickupTime     DateTime?
+  deliveryTime   DateTime?
+  proofOfDelivery Json?         // {photos: [], signature: string, notes}
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shipment    Shipment @relation(fields: [shipmentId], references: [id])
+  route       Route?   @relation(fields: [routeId], references: [id])
+  truck       Truck    @relation(fields: [truckId], references: [id])
+  driver      User?    @relation("Driver", fields: [driverId], references: [id])
+}
+
+enum DeliveryStatus {
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+model Prediction {
+  id           String          @id @default(uuid())
+  shipmentId   String
+  type         PredictionType
+  value        Float
+  confidence   Float?
+  modelVersion String?
+  createdAt    DateTime        @default(now())
+
+  shipment     Shipment @relation(fields: [shipmentId], references: [id])
+}
+
+enum PredictionType {
+  ETA_HOURS
+  DELAY_RISK_PERCENT
+  RECOMMENDED_TRUCK_SCORE
+  FUEL_ESTIMATE_LITERS
+}
