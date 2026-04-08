@@ -1,5 +1,5 @@
 const { prisma } = require('../config/db');
-
+const logger = require('../config/logger');
 
 class ShipmentService {
   async processNewShipment(shipmentId) {
@@ -11,7 +11,6 @@ class ShipmentService {
 
       if (!shipment) return;
 
-
       const recommendedType = shipment.weightKg > 15000 ? 'CONTAINER_32FT' : 'CONTAINER_20FT';
 
       const truck = await prisma.truck.findFirst({
@@ -22,7 +21,7 @@ class ShipmentService {
       });
 
       if (!truck) {
-        console.warn(`No available ${recommendedType} truck for shipment ${shipmentId}`);
+        logger.warn(`No available ${recommendedType} truck for shipment ${shipmentId}`);
         return;
       }
 
@@ -49,7 +48,6 @@ class ShipmentService {
             routeId: route.id,
             truckId: truck.id,
             status: 'ASSIGNED',
-
           },
         });
 
@@ -64,9 +62,9 @@ class ShipmentService {
         });
       });
 
-      console.log(`Shipment ${shipmentId} assigned to truck ${truck.registrationNo}`);
+      logger.info(`Shipment ${shipmentId} assigned to truck ${truck.registrationNo}`);
     } catch (err) {
-      console.error('Shipment processing failed:', err);
+      logger.error('Shipment processing failed:', err);
     }
   }
 }

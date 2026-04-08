@@ -9,7 +9,10 @@ const { protect } = require('./middleware/authMiddleware');
 
 const authRoutes = require('./routes/authRoutes');
 const shipmentRoutes = require('./routes/shipmentRoutes');
-
+const truckRoutes = require('./routes/truckRoutes');
+const mlRoutes = require('./routes/mlRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+const logger = require('./config/logger');
 
 const app = express();
 const server = http.createServer(app);
@@ -20,20 +23,21 @@ const io = new Server(server, {
 app.use(cors({ origin: process.env.FRONTEND_URL || '*' }));
 app.use(express.json());
 
-
 app.set('io', io);
-
 
 app.use('/api/auth', authRoutes);
 app.use('/api/shipments', protect, shipmentRoutes);
+app.use('/api/trucks', protect, truckRoutes);
+app.use('/api/ml', protect, mlRoutes);
+app.use('/api/analytics', protect, analyticsRoutes);
 
 
 io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
+  logger.info(`Client connected: ${socket.id}`);
 
   socket.on('join', (room) => {
     socket.join(room);
-    console.log(`Socket ${socket.id} joined ${room}`);
+    logger.info(`Socket ${socket.id} joined ${room}`);
   });
 
   socket.on('leave', (room) => {
@@ -41,7 +45,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('Client disconnected');
+    logger.info('Client disconnected');
   });
 });
 
@@ -50,8 +54,12 @@ const PORT = process.env.PORT || 5000;
 async function bootstrap() {
   await connectDB();
   server.listen(PORT, () => {
-    console.log(`Freightzeb Backend → http://localhost:${PORT}`);
+    logger.info(`FreightZen Backend running on http://localhost:${PORT}`);
+    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
   });
 }
 
-bootstrap();
+bootstrap().catch(err => {
+  logger.error('Failed to start server:', err);
+  process.exit(1);
+});
