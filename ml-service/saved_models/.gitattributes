@@ -1,0 +1,7 @@
+# Git LFS for large model files (optional - models are already compressed)
+# If models are too large for regular Git, use Git LFS
+# Install: git lfs install
+# Track: git lfs track "*.joblib"
+
+# For now, regular Git is fine since models are compressed to ~3MB each
+*.joblib binary
