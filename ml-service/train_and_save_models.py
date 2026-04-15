@@ -56,6 +56,42 @@ def train_all_models():
             'status': f'❌ FAILED: {str(e)[:50]}'
         })
     
+    # 3. Train Shipment Clusterer V2
+    logger.info("\n📍 Training Shipment Clusterer V2...")
+    try:
+        from models.shipment_clusterer_v2 import ShipmentClustererV2
+        model = ShipmentClustererV2(use_real_data=False, force_retrain=True)
+        models_trained.append({
+            'name': 'Shipment Clusterer V2',
+            'silhouette': f"{model.silhouette_score:.4f}",
+            'clusters': f"{model.n_clusters}",
+            'status': '✅ SUCCESS'
+        })
+    except Exception as e:
+        logger.error(f"❌ Failed: {e}")
+        models_trained.append({
+            'name': 'Shipment Clusterer V2',
+            'status': f'❌ FAILED: {str(e)[:50]}'
+        })
+    
+    # 4. Train Fuel Estimator V2
+    logger.info("\n⛽ Training Fuel Estimator V2...")
+    try:
+        from models.fuel_estimator_v2 import FuelEstimatorV2
+        model = FuelEstimatorV2(use_real_data=False, force_retrain=True)
+        models_trained.append({
+            'name': 'Fuel Estimator V2',
+            'r2_score': f"{model.r2_score:.4f}",
+            'mae': f"{model.mae:.2f}L",
+            'status': '✅ SUCCESS'
+        })
+    except Exception as e:
+        logger.error(f"❌ Failed: {e}")
+        models_trained.append({
+            'name': 'Fuel Estimator V2',
+            'status': f'❌ FAILED: {str(e)[:50]}'
+        })
+    
     # Summary
     logger.info("\n" + "="*70)
     logger.info("TRAINING SUMMARY")
@@ -95,8 +131,10 @@ def train_all_models():
 5. Models are automatically loaded on first import
 
 Model files:
-  • truck_recommender_v2.joblib (~5-10 MB)
-  • delivery_predictor_v2.joblib (~8-15 MB)
+  • truck_recommender_v2.joblib (~3-5 MB)
+  • delivery_predictor_v2.joblib (~3-5 MB)
+  • shipment_clusterer_v2.joblib (~2-3 MB)
+  • fuel_estimator_v2.joblib (~2-3 MB)
 
 To force retrain (optional):
   model = TruckRecommenderV2(force_retrain=True)
