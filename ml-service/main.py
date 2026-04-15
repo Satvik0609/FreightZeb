@@ -14,6 +14,14 @@ from models.route_optimizer import RouteOptimizer
 from models.predictive_maintenance import PredictiveMaintenanceModel
 from optimization.cargo_optimizer import CargoOptimizer
 
+# V2 Models - Advanced ML with pre-trained weights
+from models.truck_recommender_v2 import TruckRecommenderV2
+from models.delivery_predictor_v2 import DeliveryPredictorV2
+from models.shipment_clusterer_v2 import ShipmentClustererV2
+from models.fuel_estimator_v2 import FuelEstimatorV2
+from models.delay_predictor_v2 import DelayPredictorV2
+from models.route_optimizer_v2 import RouteOptimizerV2
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -39,6 +47,16 @@ fuel_estimator = FuelEstimator()
 route_optimizer = RouteOptimizer()
 predictive_maintenance = PredictiveMaintenanceModel()
 cargo_optimizer = CargoOptimizer()
+
+# V2 Models - Load pre-trained models instantly
+logger.info("Loading V2 models with pre-trained weights...")
+truck_recommender_v2 = TruckRecommenderV2()
+delivery_predictor_v2 = DeliveryPredictorV2()
+shipment_clusterer_v2 = ShipmentClustererV2()
+fuel_estimator_v2 = FuelEstimatorV2()
+delay_predictor_v2 = DelayPredictorV2()
+route_optimizer_v2 = RouteOptimizerV2()
+logger.info("✅ All 6 V2 models loaded successfully!")
 
 
 class TruckRecommendationRequest(BaseModel):
@@ -273,4 +291,194 @@ async def predict_maintenance(request: MaintenanceRequest):
         return result
     except Exception as e:
         logger.error(f"Maintenance prediction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# V2 ENDPOINTS - Advanced ML Models with Pre-trained Weights
+# ============================================================================
+
+@app.post("/v2/predict-truck")
+async def predict_truck_v2(request: TruckRecommendationRequest):
+    """
+    Advanced truck recommendation using XGBoost + LightGBM ensemble.
+    Accuracy: 82.97% | Pre-trained model loads instantly.
+    """
+    try:
+        result = truck_recommender_v2.recommend(
+            weight_kg=request.weight_kg,
+            volume_m3=request.volume_m3,
+            distance_km=request.distance_km,
+            cargo_type=request.cargo_type,
+            priority=request.priority
+        )
+        logger.info(f"V2 Truck recommendation: {result['recommended_truck']} (confidence: {result['confidence']:.3f})")
+        return result
+    except Exception as e:
+        logger.error(f"V2 Truck recommendation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v2/predict-delivery-time")
+async def predict_delivery_time_v2(request: DeliveryPredictionRequest):
+    """
+    Advanced delivery time prediction using XGBoost + CatBoost ensemble.
+    R² Score: 0.9410 | MAE: 1.82 hours | Pre-trained model loads instantly.
+    """
+    try:
+        result = delivery_predictor_v2.predict(
+            weight_kg=request.weight_kg,
+            distance_km=request.distance_km,
+            truck_type=request.truck_type,
+            traffic_condition=request.traffic_condition,
+            weather_condition=request.weather_condition
+        )
+        logger.info(f"V2 Delivery time prediction: {result['predicted_hours']:.2f} hours (R²={result['model_r2_score']:.4f})")
+        return result
+    except Exception as e:
+        logger.error(f"V2 Delivery prediction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v2/cluster-shipments")
+async def cluster_shipments_v2(request: ShipmentClusterRequest):
+    """
+    Advanced shipment clustering using K-Means++ + DBSCAN.
+    Silhouette Score: 0.2431 | Pre-trained model loads instantly.
+    """
+    try:
+        result = shipment_clusterer_v2.cluster(request.shipments)
+        logger.info(f"V2 Clustered {result['total_shipments']} shipments into {result['n_clusters']} groups (silhouette: {result['silhouette_score']:.4f})")
+        return result
+    except Exception as e:
+        logger.error(f"V2 Shipment clustering failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v2/estimate-fuel")
+async def estimate_fuel_v2(request: FuelEstimationRequest):
+    """
+    Advanced fuel estimation using XGBoost + Random Forest ensemble.
+    R² Score: 0.9729 | MAE: 13.68 liters | Pre-trained model loads instantly.
+    """
+    try:
+        result = fuel_estimator_v2.estimate(
+            distance_km=request.distance_km,
+            weight_kg=request.weight_kg,
+            truck_type=request.truck_type
+        )
+        logger.info(f"V2 Fuel estimate: {result['estimated_liters']:.2f} liters (${result['estimated_cost']:.2f})")
+        return result
+    except Exception as e:
+        logger.error(f"V2 Fuel estimation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v2/models/info")
+async def get_v2_models_info():
+    """
+    Get information about all V2 models including performance metrics.
+    """
+    return {
+        "version": "2.0.0",
+        "models": {
+            "truck_recommender_v2": {
+                "algorithm": "XGBoost + LightGBM Ensemble",
+                "accuracy": truck_recommender_v2.accuracy,
+                "cv_score": truck_recommender_v2.cv_score,
+                "endpoint": "/v2/predict-truck",
+                "status": "loaded",
+                "pre_trained": True
+            },
+            "delivery_predictor_v2": {
+                "algorithm": "XGBoost + CatBoost Ensemble",
+                "r2_score": delivery_predictor_v2.r2_score,
+                "mae_hours": delivery_predictor_v2.mae,
+                "rmse_hours": delivery_predictor_v2.rmse,
+                "endpoint": "/v2/predict-delivery-time",
+                "status": "loaded",
+                "pre_trained": True
+            },
+            "shipment_clusterer_v2": {
+                "algorithm": "K-Means++ + DBSCAN",
+                "silhouette_score": shipment_clusterer_v2.silhouette_score,
+                "n_clusters": 5,
+                "endpoint": "/v2/cluster-shipments",
+                "status": "loaded",
+                "pre_trained": True
+            },
+            "fuel_estimator_v2": {
+                "algorithm": "XGBoost + Random Forest Ensemble",
+                "r2_score": fuel_estimator_v2.r2_score,
+                "mae_liters": fuel_estimator_v2.mae,
+                "endpoint": "/v2/estimate-fuel",
+                "status": "loaded",
+                "pre_trained": True
+            },
+            "delay_predictor_v2": {
+                "algorithm": "XGBoost + CatBoost Ensemble",
+                "accuracy": delay_predictor_v2.accuracy,
+                "cv_score": delay_predictor_v2.cv_score,
+                "roc_auc": delay_predictor_v2.roc_auc,
+                "endpoint": "/v2/predict-delay-risk",
+                "status": "loaded",
+                "pre_trained": True
+            },
+            "route_optimizer_v2": {
+                "algorithm": "Genetic Algorithm + 2-opt",
+                "avg_improvement": route_optimizer_v2.avg_improvement,
+                "best_efficiency": route_optimizer_v2.best_efficiency,
+                "endpoint": "/v2/optimize-route",
+                "status": "loaded",
+                "pre_trained": True
+            }
+        },
+        "features": [
+            "Pre-trained models load instantly (< 6 seconds)",
+            "No training required for collaborators",
+            "High accuracy (81-97% across models)",
+            "Real-time inference (< 10ms per prediction)",
+            "Ensemble methods for robust predictions"
+        ]
+    }
+
+
+@app.post("/v2/predict-delay-risk")
+async def predict_delay_risk_v2(request: DelayPredictionRequest):
+    """
+    Advanced delay risk prediction using XGBoost + CatBoost ensemble.
+    Accuracy: 80.80% | ROC AUC: 0.9434 | Pre-trained model loads instantly.
+    """
+    try:
+        result = delay_predictor_v2.predict(
+            distance_km=request.distance_km,
+            weight_kg=request.weight_kg,
+            truck_type=request.truck_type,
+            weather_condition=request.weather_condition,
+            traffic_condition=request.traffic_condition,
+            time_of_day=request.time_of_day
+        )
+        logger.info(f"V2 Delay risk: {result['risk_level']} (confidence: {result['confidence']:.3f})")
+        return result
+    except Exception as e:
+        logger.error(f"V2 Delay prediction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v2/optimize-route")
+async def optimize_route_v2(request: RouteOptimizationRequest):
+    """
+    Advanced route optimization using Genetic Algorithm + 2-opt.
+    Avg Improvement: 42.2% | Best Efficiency: 98.5% | Pre-trained model loads instantly.
+    """
+    try:
+        result = route_optimizer_v2.optimize_route(
+            start=request.start,
+            destinations=request.destinations,
+            constraints=request.constraints
+        )
+        logger.info(f"V2 Route optimized: {result['total_distance_km']:.2f} km ({result['improvement_percent']:.1f}% improvement)")
+        return result
+    except Exception as e:
+        logger.error(f"V2 Route optimization failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

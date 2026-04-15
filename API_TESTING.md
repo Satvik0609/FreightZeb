@@ -497,3 +497,257 @@ This guide covers all API endpoints in FreightZen. Use these examples to:
 - Build client applications
 - Debug issues
 - Performance testing
+
+
+---
+
+## V2 API Endpoints (Advanced ML Models)
+
+### Overview
+V2 endpoints use pre-trained advanced ML models with higher accuracy:
+- **Truck Recommender V2**: 82.97% accuracy (XGBoost + LightGBM)
+- **Delivery Predictor V2**: R²=0.9410 (XGBoost + CatBoost)
+- **Shipment Clusterer V2**: Silhouette=0.2431 (K-Means++ + DBSCAN)
+- **Fuel Estimator V2**: R²=0.9729 (XGBoost + Random Forest)
+
+All V2 models load instantly from pre-trained weights (< 3 seconds total).
+
+### 1. Truck Recommendation V2
+
+**Endpoint**: `POST /v2/predict-truck`
+
+**Request**:
+```bash
+curl -X POST http://localhost:8000/v2/predict-truck \
+  -H "Content-Type: application/json" \
+  -d '{
+    "weight_kg": 5000,
+    "volume_m3": 15,
+    "distance_km": 500,
+    "cargo_type": "GENERAL",
+    "priority": "HIGH"
+  }'
+```
+
+**Response**:
+```json
+{
+  "recommended_truck": "CONTAINER_20FT",
+  "confidence": 0.643,
+  "model_accuracy": 0.8297,
+  "cv_score": 0.8285,
+  "alternatives": [
+    {"truck_type": "CONTAINER_32FT", "confidence": 0.234},
+    {"truck_type": "FLATBED_TRAILER", "confidence": 0.089}
+  ],
+  "model_type": "Ensemble (XGBoost + LightGBM)",
+  "data_source": "Synthetic Data"
+}
+```
+
+### 2. Delivery Time Prediction V2
+
+**Endpoint**: `POST /v2/predict-delivery-time`
+
+**Request**:
+```bash
+curl -X POST http://localhost:8000/v2/predict-delivery-time \
+  -H "Content-Type: application/json" \
+  -d '{
+    "weight_kg": 5000,
+    "distance_km": 500,
+    "truck_type": "CONTAINER_20FT",
+    "traffic_condition": "MODERATE",
+    "weather_condition": "CLEAR"
+  }'
+```
+
+**Response**:
+```json
+{
+  "predicted_hours": 14.49,
+  "predicted_minutes": 870,
+  "confidence": 0.978,
+  "model_r2_score": 0.9410,
+  "model_mae_hours": 1.82,
+  "model_rmse_hours": 8.25,
+  "confidence_interval": {
+    "lower_hours": 14.33,
+    "upper_hours": 14.66
+  },
+  "model_predictions": {
+    "xgboost": 14.52,
+    "catboost": 14.45,
+    "ensemble": 14.49
+  },
+  "model_type": "Ensemble (XGBoost + CatBoost)",
+  "data_source": "Synthetic Data"
+}
+```
+
+### 3. Shipment Clustering V2
+
+**Endpoint**: `POST /v2/cluster-shipments`
+
+**Request**:
+```bash
+curl -X POST http://localhost:8000/v2/cluster-shipments \
+  -H "Content-Type: application/json" \
+  -d '{
+    "shipments": [
+      {"latitude": 40.7128, "longitude": -74.0060, "weight_kg": 5000, "volume_m3": 15},
+      {"latitude": 40.7580, "longitude": -73.9855, "weight_kg": 3000, "volume_m3": 10},
+      {"latitude": 34.0522, "longitude": -118.2437, "weight_kg": 8000, "volume_m3": 25}
+    ]
+  }'
+```
+
+**Response**:
+```json
+{
+  "n_clusters": 2,
+  "silhouette_score": 0.2431,
+  "total_shipments": 3,
+  "clusters": [
+    {
+      "cluster_id": 0,
+      "shipments": [0, 1],
+      "centroid": {"latitude": 40.7354, "longitude": -73.9958},
+      "avg_weight_kg": 4000,
+      "avg_volume_m3": 12.5
+    },
+    {
+      "cluster_id": 1,
+      "shipments": [2],
+      "centroid": {"latitude": 34.0522, "longitude": -118.2437},
+      "avg_weight_kg": 8000,
+      "avg_volume_m3": 25
+    }
+  ],
+  "model_type": "K-Means++ + DBSCAN",
+  "data_source": "Synthetic Data"
+}
+```
+
+### 4. Fuel Estimation V2
+
+**Endpoint**: `POST /v2/estimate-fuel`
+
+**Request**:
+```bash
+curl -X POST http://localhost:8000/v2/estimate-fuel \
+  -H "Content-Type: application/json" \
+  -d '{
+    "distance_km": 500,
+    "weight_kg": 5000,
+    "truck_type": "CONTAINER_20FT"
+  }'
+```
+
+**Response**:
+```json
+{
+  "estimated_liters": 128.26,
+  "estimated_cost": 185.97,
+  "model_r2_score": 0.9729,
+  "model_mae_liters": 13.68,
+  "consumption_per_100km": 25.65,
+  "co2_emissions_kg": 343.74,
+  "efficiency_rating": "GOOD",
+  "model_predictions": {
+    "xgboost": 129.15,
+    "random_forest": 127.38,
+    "ensemble": 128.26
+  },
+  "model_type": "Ensemble (XGBoost + Random Forest)",
+  "data_source": "Synthetic Data"
+}
+```
+
+### 5. V2 Models Information
+
+**Endpoint**: `GET /v2/models/info`
+
+**Request**:
+```bash
+curl http://localhost:8000/v2/models/info
+```
+
+**Response**:
+```json
+{
+  "version": "2.0.0",
+  "models": {
+    "truck_recommender_v2": {
+      "algorithm": "XGBoost + LightGBM Ensemble",
+      "accuracy": 0.8297,
+      "cv_score": 0.8285,
+      "endpoint": "/v2/predict-truck",
+      "status": "loaded",
+      "pre_trained": true
+    },
+    "delivery_predictor_v2": {
+      "algorithm": "XGBoost + CatBoost Ensemble",
+      "r2_score": 0.9410,
+      "mae_hours": 1.82,
+      "rmse_hours": 8.25,
+      "endpoint": "/v2/predict-delivery-time",
+      "status": "loaded",
+      "pre_trained": true
+    },
+    "shipment_clusterer_v2": {
+      "algorithm": "K-Means++ + DBSCAN",
+      "silhouette_score": 0.2431,
+      "n_clusters": 5,
+      "endpoint": "/v2/cluster-shipments",
+      "status": "loaded",
+      "pre_trained": true
+    },
+    "fuel_estimator_v2": {
+      "algorithm": "XGBoost + Random Forest Ensemble",
+      "r2_score": 0.9729,
+      "mae_liters": 13.68,
+      "endpoint": "/v2/estimate-fuel",
+      "status": "loaded",
+      "pre_trained": true
+    }
+  },
+  "features": [
+    "Pre-trained models load instantly (< 3 seconds)",
+    "No training required for collaborators",
+    "High accuracy (83-97% across models)",
+    "Real-time inference (< 10ms per prediction)",
+    "Ensemble methods for robust predictions"
+  ]
+}
+```
+
+### Testing V2 Endpoints
+
+Use the provided test script:
+
+```bash
+cd ml-service
+python test_v2_api.py
+```
+
+### V1 vs V2 Comparison
+
+| Feature | V1 Endpoints | V2 Endpoints |
+|---------|-------------|--------------|
+| **Algorithms** | Basic ML / Rule-based | XGBoost, LightGBM, CatBoost |
+| **Accuracy** | 70-92% | 83-97% |
+| **Training** | Every startup | Pre-trained (instant load) |
+| **Load Time** | 15-20 seconds | < 3 seconds |
+| **Inference** | < 50ms | < 10ms |
+| **Model Persistence** | No | Yes (saved to disk) |
+| **Ensemble Methods** | Limited | Advanced weighted ensembles |
+| **Confidence Intervals** | No | Yes |
+| **Cross-validation** | No | Yes |
+
+### Recommendation
+
+- **Use V2 endpoints** for production applications requiring high accuracy
+- **Use V1 endpoints** for quick prototyping or when V2 models are unavailable
+- V2 models are **collaborator-friendly** - no training required after cloning repo
+
