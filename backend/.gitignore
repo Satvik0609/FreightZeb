@@ -1,0 +1,52 @@
+#  Dependencies
+node_modules/
+
+#  Environment variables
+.env
+.env.*
+!.env.example
+
+# 🛠 Build / Output
+dist/
+build/
+out/
+
+#  Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+#  OS files
+.DS_Store
+Thumbs.db
+
+#  IDE / Editor
+.vscode/
+.idea/
+
+# Prisma (optional - keep migrations if needed)
+# prisma/migrations/  (uncomment if you DON'T want migrations in repo)
+
+#  Coverage
+coverage/
+
+# ⚙️ Cache
+.cache/
+.tmp/
+
+#  Misc
+*.pid
+*.seed
+*.tgz
+
+#  Secrets (extra safety)
+config/secrets.js
+
+# Logs directory (keep folder, ignore files)
+logs/*.log
+!logs/.gitkeep
+
+# Docker
+docker-compose.override.yml

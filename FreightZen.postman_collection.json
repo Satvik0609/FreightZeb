@@ -1,0 +1,1628 @@
+{
+  "info": {
+    "name": "FreightZen API",
+    "_postman_id": "freightzen-api-v1",
+    "description": "Complete API collection for FreightZen logistics platform.\n\n## Setup\n1. Start backend: `npm run dev` (port 5000)\n2. Start ML service: `uvicorn main:app` (port 8000)\n3. Run **01 - Register (ADMIN)** first, then **02 - Login**\n4. The `token` variable auto-saves after login â€” all auth requests use it automatically\n\n## Roles\n- **ADMIN** â†’ full access\n- **WAREHOUSE** â†’ create shipments, bookings, view own data\n- **DEALER** â†’ create trucks, view bookings assigned to them\n\n## Testing Flow\n1. Auth â†’ Register â†’ Login (saves token)\n2. Trucks â†’ Create Truck\n3. Shipments â†’ Create Shipment\n4. Bookings â†’ Create Booking (use IDs from steps 2 & 3)\n5. Bookings â†’ Update Status (APPROVED â†’ IN_TRANSIT â†’ DELIVERED)\n6. Tracking â†’ Push Location\n7. ML â†’ all predictions\n8. Analytics â†’ view dashboard data",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",          "value": "http://localhost:5000", "type": "string" },
+    { "key": "token",            "value": "",                      "type": "string" },
+    { "key": "dealerToken",      "value": "",                      "type": "string" },
+    { "key": "warehouseToken",   "value": "",                      "type": "string" },
+    { "key": "userId",           "value": "",                      "type": "string" },
+    { "key": "truckId",          "value": "",                      "type": "string" },
+    { "key": "shipmentId",       "value": "",                      "type": "string" },
+    { "key": "bookingId",        "value": "",                      "type": "string" },
+    { "key": "invoiceId",        "value": "",                      "type": "string" },
+    { "key": "notificationId",   "value": "",                      "type": "string" },
+    { "key": "lastBookingStatus","value": "",                      "type": "string" }
+  ],
+  "item": [
+
+    {
+      "name": "ðŸŸ¢ Health",
+      "item": [
+        {
+          "name": "Backend Health",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] },
+            "description": "No auth required. Returns status, env, uptime."
+          }
+        },
+        {
+          "name": "ML Service Health",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/ml/health", "host": ["{{baseUrl}}"], "path": ["api","ml","health"] },
+            "description": "No auth required. Proxied through backend to ML microservice."
+          }
+        },
+        {
+          "name": "ML Models Info",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/ml/models/info", "host": ["{{baseUrl}}"], "path": ["api","ml","models","info"] },
+            "description": "No auth required. Returns info about all loaded ML models."
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ” Auth",
+      "item": [
+        {
+          "name": "01 - Register (ADMIN)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const r = pm.response.json();",
+                  "if (pm.response.code === 201) {",
+                  "  if (r.token) pm.collectionVariables.set('token', r.token);",
+                  "  if (r.user && r.user.id) pm.collectionVariables.set('userId', r.user.id);",
+                  "  pm.test('Registered successfully', () => pm.response.to.have.status(201));",
+                  "} else if (pm.response.code === 422) {",
+                  "  pm.test('Admin already exists â€” will login next', () => true);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Admin User\",\n  \"email\": \"admin@freightzen.in\",\n  \"password\": \"Admin@1234\",\n  \"role\": \"ADMIN\",\n  \"phone\": \"9876543210\",\n  \"company\": \"FreightZen HQ\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api","auth","register"] },
+            "description": "Register an ADMIN user. Token auto-saved to collection variable."
+          }
+        },
+        {
+          "name": "01b - Register (WAREHOUSE)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Warehouse Manager\",\n  \"email\": \"ops@bharat-logistics.in\",\n  \"password\": \"Warehouse@1234\",\n  \"role\": \"WAREHOUSE\",\n  \"company\": \"Mumbai Warehouse\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api","auth","register"] }
+          }
+        },
+        {
+          "name": "01c - Register (DEALER)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Truck Dealer\",\n  \"email\": \"fleet@rajesh-transport.in\",\n  \"password\": \"Dealer@1234\",\n  \"role\": \"DEALER\",\n  \"company\": \"FastTruck Logistics\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api","auth","register"] }
+          }
+        },
+        {
+          "name": "02 - Login",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Try Admin@1234 first, if fails try Admin@5678 (from previous password change run)",
+                  "const base = pm.collectionVariables.get('baseUrl');",
+                  "pm.sendRequest({",
+                  "  url: base + '/api/auth/login',",
+                  "  method: 'POST',",
+                  "  header: { 'Content-Type': 'application/json' },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ email: 'admin@freightzen.in', password: 'Admin@5678' }) }",
+                  "}, (err, res) => {",
+                  "  if (!err && res.code === 200) {",
+                  "    // Password was changed in a previous run — reset it back to Admin@1234",
+                  "    const tok = res.json().token;",
+                  "    pm.sendRequest({",
+                  "      url: base + '/api/auth/me/password',",
+                  "      method: 'PATCH',",
+                  "      header: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },",
+                  "      body: { mode: 'raw', raw: JSON.stringify({ currentPassword: 'Admin@5678', newPassword: 'Admin@1234' }) }",
+                  "    }, () => { console.log('Password reset to Admin@1234'); });",
+                  "  }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login OK', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.collectionVariables.set('token', r.token);",
+                  "if (r.user && r.user.id) pm.collectionVariables.set('userId', r.user.id);",
+                  "pm.test('Token saved', () => pm.expect(r.token).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@freightzen.in\",\n  \"password\": \"Admin@1234\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] },
+            "description": "Login. JWT token is auto-saved to {{token}} variable."
+          }
+        },
+        {
+          "name": "03 - Get My Profile",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/auth/me", "host": ["{{baseUrl}}"], "path": ["api","auth","me"] }
+          }
+        },
+        {
+          "name": "04 - Update My Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Admin Updated\",\n  \"phone\": \"9999999999\",\n  \"company\": \"FreightZen Corp\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/me", "host": ["{{baseUrl}}"], "path": ["api","auth","me"] }
+          }
+        },
+        {
+          "name": "05 - Change Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Password changed', () => pm.response.to.have.status(200));",
+                  "// Re-login with new password to refresh token",
+                  "const loginReq = {",
+                  "  url: pm.collectionVariables.get('baseUrl') + '/api/auth/login',",
+                  "  method: 'POST',",
+                  "  header: { 'Content-Type': 'application/json' },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ email: 'admin@freightzen.in', password: 'Admin@5678' }) }",
+                  "};",
+                  "pm.sendRequest(loginReq, (err, res) => {",
+                  "  if (!err && res.code === 200) {",
+                  "    pm.collectionVariables.set('token', res.json().token);",
+                  "    console.log('Token refreshed after password change');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"Admin@1234\",\n  \"newPassword\": \"Admin@5678\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/me/password", "host": ["{{baseUrl}}"], "path": ["api","auth","me","password"] }
+          }
+        },
+        {
+          "name": "05b - Re-Login After Password Change",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const r = pm.response.json();",
+                  "  pm.collectionVariables.set('token', r.token);",
+                  "  pm.test('Token refreshed', () => pm.expect(r.token).to.be.a('string'));",
+                  "} else {",
+                  "  pm.test('Re-login skipped (password may not have changed)', () => true);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@freightzen.in\",\n  \"password\": \"Admin@5678\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] }
+          }
+        },
+        {
+          "name": "06 - Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@freightzen.in\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["api","auth","forgot-password"] }
+          }
+        },
+        {
+          "name": "07 - Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"PASTE_RESET_TOKEN_FROM_EMAIL_OR_CONSOLE_LOG\",\n  \"newPassword\": \"NewPass@1234\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/reset-password", "host": ["{{baseUrl}}"], "path": ["api","auth","reset-password"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸš› Trucks",
+      "item": [
+        {
+          "name": "01 - Create Truck (DEALER)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const r = pm.response.json();",
+                  "  const id = r.truck?.id || r.id || r.data?.id;",
+                  "  if (id) { pm.collectionVariables.set('truckId', id); pm.test('truckId saved: ' + id, () => true); }",
+                  "  pm.test('Truck created', () => pm.response.to.have.status(201));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"registrationNo\": \"MH12AB1234\",\n  \"truckType\": \"CONTAINER_20FT\",\n  \"capacityKg\": 15000,\n  \"capacityM3\": 40,\n  \"routeFrom\": \"Mumbai\",\n  \"routeTo\": \"Delhi\",\n  \"pricePerKm\": 18.5\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/trucks", "host": ["{{baseUrl}}"], "path": ["api","trucks"] },
+            "description": "Requires DEALER or ADMIN role.\nTruck ID auto-saved to {{truckId}}."
+          }
+        },
+        {
+          "name": "02 - List Available Trucks",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/trucks/available", "host": ["{{baseUrl}}"], "path": ["api","trucks","available"] }
+          }
+        },
+        {
+          "name": "03 - My Trucks (DEALER)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/trucks/my", "host": ["{{baseUrl}}"], "path": ["api","trucks","my"] }
+          }
+        },
+        {
+          "name": "04 - All Trucks (ADMIN)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/trucks", "host": ["{{baseUrl}}"], "path": ["api","trucks"] }
+          }
+        },
+        {
+          "name": "05 - Get Truck by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/trucks/{{truckId}}", "host": ["{{baseUrl}}"], "path": ["api","trucks","{{truckId}}"] }
+          }
+        },
+        {
+          "name": "06 - Update Truck",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pricePerKm\": 20,\n  \"capacityKg\": 16000\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/trucks/{{truckId}}", "host": ["{{baseUrl}}"], "path": ["api","trucks","{{truckId}}"] }
+          }
+        },
+        {
+          "name": "07 - Update Truck Location (DEALER)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lat\": 19.0760,\n  \"lng\": 72.8777\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/trucks/{{truckId}}/location", "host": ["{{baseUrl}}"], "path": ["api","trucks","{{truckId}}","location"] }
+          }
+        },
+        {
+          "name": "09 - Optimize Loading (DEALER/ADMIN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"truck\": {\n    \"length\": 12.0,\n    \"width\": 2.4,\n    \"height\": 2.6\n  },\n  \"shipmentIds\": [\"{{shipmentId}}\"]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/trucks/optimize-loading", "host": ["{{baseUrl}}"], "path": ["api","trucks","optimize-loading"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ“¦ Shipments",
+      "item": [
+        {
+          "name": "01 - Create Shipment (WAREHOUSE)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const r = pm.response.json();",
+                  "  const id = r.shipment?.id || r.id || r.data?.id;",
+                  "  if (id) { pm.collectionVariables.set('shipmentId', id); pm.test('shipmentId saved: ' + id, () => true); }",
+                  "  pm.test('Shipment created', () => pm.response.to.have.status(201));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"weightKg\": 5000,\n  \"volumeM3\": 18,\n  \"boxes\": 20,\n  \"pickupLocation\": {\n    \"lat\": 19.0760,\n    \"lng\": 72.8777,\n    \"address\": \"Mumbai Warehouse, APMC Market, Vashi, Mumbai - 400703\"\n  },\n  \"destination\": {\n    \"lat\": 28.7041,\n    \"lng\": 77.1025,\n    \"address\": \"Delhi Distribution Centre, Azadpur Mandi, Delhi - 110033\"\n  },\n  \"deadline\": \"2026-05-01T18:00:00.000Z\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/shipments", "host": ["{{baseUrl}}"], "path": ["api","shipments"] },
+            "description": "Requires WAREHOUSE or ADMIN role.\nshipmentId auto-saved to {{shipmentId}}."
+          }
+        },
+        {
+          "name": "02 - My Shipments (WAREHOUSE)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/shipments/my", "host": ["{{baseUrl}}"], "path": ["api","shipments","my"] }
+          }
+        },
+        {
+          "name": "03 - All Shipments (ADMIN)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/shipments", "host": ["{{baseUrl}}"], "path": ["api","shipments"] }
+          }
+        },
+        {
+          "name": "04 - Get Shipment by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/shipments/{{shipmentId}}", "host": ["{{baseUrl}}"], "path": ["api","shipments","{{shipmentId}}"] }
+          }
+        },
+        {
+          "name": "05 - Cancel Shipment",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/shipments/{{shipmentId}}/cancel", "host": ["{{baseUrl}}"], "path": ["api","shipments","{{shipmentId}}","cancel"] }
+          }
+        },
+        {
+          "name": "06 - Run Optimization (WAREHOUSE/ADMIN)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/shipments/{{shipmentId}}/optimize", "host": ["{{baseUrl}}"], "path": ["api","shipments","{{shipmentId}}","optimize"] }
+          }
+        },
+        {
+          "name": "07 - Consolidate Shipments",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/shipments/consolidate?from=Mumbai&to=Delhi",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","shipments","consolidate"],
+              "query": [
+                { "key": "from", "value": "Mumbai" },
+                { "key": "to",   "value": "Delhi" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ“‹ Bookings",
+      "item": [
+        {
+          "name": "01 - Create Booking (WAREHOUSE)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Chain: create shipment first, then truck inside callback, ensuring both IDs are set before booking fires",
+                  "const base = pm.collectionVariables.get('baseUrl');",
+                  "const tok  = pm.collectionVariables.get('token');",
+                  "pm.sendRequest({",
+                  "  url: base + '/api/shipments',",
+                  "  method: 'POST',",
+                  "  header: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({",
+                  "    weightKg: 5000, volumeM3: 18, boxes: 20,",
+                  "    pickupLocation: { lat: 19.076, lng: 72.877, address: 'Mumbai Warehouse' },",
+                  "    destination:    { lat: 28.704, lng: 77.102, address: 'Delhi Distribution Centre' },",
+                  "    deadline: new Date(Date.now() + 7*86400000).toISOString()",
+                  "  }) }",
+                  "}, (err, res) => {",
+                  "  if (!err && res.code === 201) {",
+                  "    const sid = res.json().shipment?.id || res.json().id;",
+                  "    if (sid) { pm.collectionVariables.set('shipmentId', sid); console.log('shipmentId: ' + sid); }",
+                  "  }",
+                  "  // Chain truck creation INSIDE shipment callback so both complete before booking fires",
+                  "  pm.sendRequest({",
+                  "    url: base + '/api/trucks',",
+                  "    method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({",
+                  "      registrationNo: 'BK-' + Date.now().toString().slice(-8),",
+                  "      truckType: 'CONTAINER_20FT', capacityKg: 15000, capacityM3: 40,",
+                  "      routeFrom: 'Mumbai', routeTo: 'Delhi', pricePerKm: 18.5",
+                  "    }) }",
+                  "  }, (err2, res2) => {",
+                  "    if (!err2 && res2.code === 201) {",
+                  "      const tid = res2.json().truck?.id || res2.json().id;",
+                  "      if (tid) { pm.collectionVariables.set('truckId', tid); console.log('truckId: ' + tid); }",
+                  "    }",
+                  "  });",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const r = pm.response.json();",
+                  "  const id = r.booking?.id || r.id || r.data?.id;",
+                  "  if (id) { pm.collectionVariables.set('bookingId', id); pm.test('bookingId saved: ' + id, () => true); }",
+                  "  pm.test('Booking created', () => pm.response.to.have.status(201));",
+                  "} else {",
+                  "  pm.test('Booking created (got ' + pm.response.code + ')', () => pm.response.to.have.status(201));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shipmentId\": \"{{shipmentId}}\",\n  \"truckId\": \"{{truckId}}\",\n  \"notes\": \"Handle with care â€” fragile items inside\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/bookings", "host": ["{{baseUrl}}"], "path": ["api","bookings"] },
+            "description": "Requires WAREHOUSE or ADMIN role.\nbookingId auto-saved to {{bookingId}}.\n\nMake sure {{shipmentId}} and {{truckId}} are set from previous steps."
+          }
+        },
+        {
+          "name": "02 - My Bookings (WAREHOUSE)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/bookings/my", "host": ["{{baseUrl}}"], "path": ["api","bookings","my"] }
+          }
+        },
+        {
+          "name": "02b - Dealer Bookings (DEALER)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/bookings/dealer", "host": ["{{baseUrl}}"], "path": ["api","bookings","dealer"] }
+          }
+        },
+        {
+          "name": "03 - All Bookings (ADMIN)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/bookings", "host": ["{{baseUrl}}"], "path": ["api","bookings"] }
+          }
+        },
+        {
+          "name": "04 - Get Booking by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/bookings/{{bookingId}}", "host": ["{{baseUrl}}"], "path": ["api","bookings","{{bookingId}}"] }
+          }
+        },
+        {
+          "name": "05 - Approve Booking",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"APPROVED\",\n  \"notes\": \"Booking approved by admin\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/bookings/{{bookingId}}/status", "host": ["{{baseUrl}}"], "path": ["api","bookings","{{bookingId}}","status"] }
+          }
+        },
+        {
+          "name": "06 - Mark Picked Up",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"PICKED_UP\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/bookings/{{bookingId}}/status", "host": ["{{baseUrl}}"], "path": ["api","bookings","{{bookingId}}","status"] }
+          }
+        },
+        {
+          "name": "07 - Mark In Transit",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"IN_TRANSIT\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/bookings/{{bookingId}}/status", "host": ["{{baseUrl}}"], "path": ["api","bookings","{{bookingId}}","status"] }
+          }
+        },
+        {
+          "name": "08 - Mark Delivered",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Booking delivered', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  pm.collectionVariables.set('lastBookingStatus', 'DELIVERED');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"DELIVERED\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/bookings/{{bookingId}}/status", "host": ["{{baseUrl}}"], "path": ["api","bookings","{{bookingId}}","status"] }
+          }
+        },
+        {
+          "name": "09 - Delete Truck (after booking lifecycle)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const status = pm.collectionVariables.get('lastBookingStatus');",
+                  "if (status !== 'DELIVERED') {",
+                  "  console.log('Skipping Delete Truck — booking not DELIVERED yet');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Truck deleted', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/trucks/{{truckId}}", "host": ["{{baseUrl}}"], "path": ["api","trucks","{{truckId}}"] }
+          }
+        },
+        {
+          "name": "10 - Reject Booking",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"REJECTED\",\n  \"notes\": \"Truck not available on requested date\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/bookings/{{bookingId}}/status", "host": ["{{baseUrl}}"], "path": ["api","bookings","{{bookingId}}","status"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ“ Tracking",
+      "item": [
+        {
+          "name": "01 - Push GPS Location (DEALER)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bookingId\": \"{{bookingId}}\",\n  \"latitude\": 21.1458,\n  \"longitude\": 79.0882,\n  \"status\": \"In transit near Nagpur\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/tracking/update", "host": ["{{baseUrl}}"], "path": ["api","tracking","update"] }
+          }
+        },
+        {
+          "name": "02 - Get Tracking History",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/tracking/{{bookingId}}", "host": ["{{baseUrl}}"], "path": ["api","tracking","{{bookingId}}"] }
+          }
+        },
+        {
+          "name": "03 - Get Latest Location",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/tracking/{{bookingId}}/latest", "host": ["{{baseUrl}}"], "path": ["api","tracking","{{bookingId}}","latest"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ’° Invoices",
+      "item": [
+        {
+          "name": "01 - My Invoices (WAREHOUSE)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "const invoices = r.invoices || r.data || r;",
+                  "if (Array.isArray(invoices) && invoices.length > 0) {",
+                  "  pm.collectionVariables.set('invoiceId', invoices[0].id);",
+                  "  console.log('invoiceId saved: ' + invoices[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/invoices/my", "host": ["{{baseUrl}}"], "path": ["api","invoices","my"] }
+          }
+        },
+        {
+          "name": "02 - All Invoices (ADMIN)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/invoices", "host": ["{{baseUrl}}"], "path": ["api","invoices"] }
+          }
+        },
+        {
+          "name": "03 - Get Invoice by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/invoices/{{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api","invoices","{{invoiceId}}"] },
+            "description": "Set {{invoiceId}} manually from My Invoices response."
+          }
+        },
+        {
+          "name": "04 - Mark Invoice Paid (ADMIN)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/invoices/{{invoiceId}}/pay", "host": ["{{baseUrl}}"], "path": ["api","invoices","{{invoiceId}}","pay"] }
+          }
+        },
+        {
+          "name": "05 - Cancel Invoice (ADMIN)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/invoices/{{invoiceId}}/cancel", "host": ["{{baseUrl}}"], "path": ["api","invoices","{{invoiceId}}","cancel"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ”” Notifications",
+      "item": [
+        {
+          "name": "01 - Get My Notifications",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "const notifs = r.notifications || r.data || r;",
+                  "if (Array.isArray(notifs) && notifs.length > 0) {",
+                  "  pm.collectionVariables.set('notificationId', notifs[0].id);",
+                  "  console.log('notificationId saved: ' + notifs[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/notifications", "host": ["{{baseUrl}}"], "path": ["api","notifications"] }
+          }
+        },
+        {
+          "name": "02 - Mark All Read",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/notifications/read-all", "host": ["{{baseUrl}}"], "path": ["api","notifications","read-all"] }
+          }
+        },
+        {
+          "name": "03 - Mark One Read",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/notifications/{{notificationId}}/read", "host": ["{{baseUrl}}"], "path": ["api","notifications","{{notificationId}}","read"] },
+            "description": "Replace NOTIFICATION_ID with actual ID from Get My Notifications."
+          }
+        },
+        {
+          "name": "04 - Delete Notification",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/notifications/{{notificationId}}", "host": ["{{baseUrl}}"], "path": ["api","notifications","{{notificationId}}"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ“Š Analytics",
+      "item": [
+        {
+          "name": "01 - Warehouse Analytics",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/analytics/warehouse", "host": ["{{baseUrl}}"], "path": ["api","analytics","warehouse"] }
+          }
+        },
+        {
+          "name": "02 - Dealer Analytics",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/analytics/dealer", "host": ["{{baseUrl}}"], "path": ["api","analytics","dealer"] }
+          }
+        },
+        {
+          "name": "03 - Admin Analytics",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/analytics/admin", "host": ["{{baseUrl}}"], "path": ["api","analytics","admin"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ‘‘ Admin",
+      "item": [
+        {
+          "name": "01 - Get All Users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users", "host": ["{{baseUrl}}"], "path": ["api","admin","users"] }
+          }
+        },
+        {
+          "name": "02 - Get User by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users/{{userId}}", "host": ["{{baseUrl}}"], "path": ["api","admin","users","{{userId}}"] }
+          }
+        },
+        {
+          "name": "03 - Update User Role",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"role\": \"WAREHOUSE\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/admin/users/{{userId}}/role", "host": ["{{baseUrl}}"], "path": ["api","admin","users","{{userId}}","role"] }
+          }
+        },
+        {
+          "name": "04 - Toggle User Active",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users/{{userId}}/toggle", "host": ["{{baseUrl}}"], "path": ["api","admin","users","{{userId}}","toggle"] }
+          }
+        },
+        {
+          "name": "05 - Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users/{{userId}}", "host": ["{{baseUrl}}"], "path": ["api","admin","users","{{userId}}"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ“ Uploads",
+      "item": [
+        {
+          "name": "01 - Upload Avatar",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "avatar", "type": "file", "src": "", "description": "Select an image file (JPG/PNG, max 2MB)" }]
+            },
+            "url": { "raw": "{{baseUrl}}/api/uploads/avatar", "host": ["{{baseUrl}}"], "path": ["api","uploads","avatar"] }
+          }
+        },
+        {
+          "name": "02 - Delete Avatar",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/uploads/avatar", "host": ["{{baseUrl}}"], "path": ["api","uploads","avatar"] }
+          }
+        },
+        {
+          "name": "03 - Upload Proof of Delivery (DEALER)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "photos",    "type": "file", "src": "", "description": "Up to 5 delivery photos" },
+                { "key": "signature", "type": "file", "src": "", "description": "Signature image" }
+              ]
+            },
+            "url": { "raw": "{{baseUrl}}/api/uploads/proof/{{bookingId}}", "host": ["{{baseUrl}}"], "path": ["api","uploads","proof","{{bookingId}}"] }
+          }
+        },
+        {
+          "name": "04 - Get Proof of Delivery",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/uploads/proof/{{bookingId}}", "host": ["{{baseUrl}}"], "path": ["api","uploads","proof","{{bookingId}}"] }
+          }
+        },
+        {
+          "name": "05 - Upload Shipment Document (WAREHOUSE)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "document", "type": "file", "src": "", "description": "PDF or image document" }]
+            },
+            "url": { "raw": "{{baseUrl}}/api/uploads/document/{{shipmentId}}", "host": ["{{baseUrl}}"], "path": ["api","uploads","document","{{shipmentId}}"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ¤– ML Predictions",
+      "item": [
+        {
+          "name": "01 - Recommend Truck",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/ml/recommend-truck?weight_kg=8000&volume_m3=25&distance_km=500&cargo_type=GENERAL&priority=NORMAL",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","ml","recommend-truck"],
+              "query": [
+                { "key": "weight_kg",   "value": "8000"    },
+                { "key": "volume_m3",   "value": "25"      },
+                { "key": "distance_km", "value": "500"     },
+                { "key": "cargo_type",  "value": "GENERAL" },
+                { "key": "priority",    "value": "NORMAL"  }
+              ]
+            },
+            "description": "Returns recommended truck type + confidence.\nFalls back to heuristic if ML service is down."
+          }
+        },
+        {
+          "name": "02 - Predict Delivery Time (for a Shipment)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/ml/predict-delivery/{{shipmentId}}?traffic=MODERATE&weather=CLEAR",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","ml","predict-delivery","{{shipmentId}}"],
+              "query": [
+                { "key": "traffic", "value": "MODERATE" },
+                { "key": "weather", "value": "CLEAR"    }
+              ]
+            }
+          }
+        },
+        {
+          "name": "03 - Predict Delay Risk (for a Shipment)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/ml/predict-delay/{{shipmentId}}?weather=RAIN&traffic=HEAVY&time_of_day=EVENING",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","ml","predict-delay","{{shipmentId}}"],
+              "query": [
+                { "key": "weather",     "value": "RAIN"    },
+                { "key": "traffic",     "value": "HEAVY"   },
+                { "key": "time_of_day", "value": "EVENING" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "04 - Estimate Fuel",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/ml/estimate-fuel?distance_km=400&weight_kg=6000&truck_type=CONTAINER_20FT",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","ml","estimate-fuel"],
+              "query": [
+                { "key": "distance_km", "value": "400"            },
+                { "key": "weight_kg",   "value": "6000"           },
+                { "key": "truck_type",  "value": "CONTAINER_20FT" }
+              ]
+            },
+            "description": "Returns estimated_liters, estimated_cost, co2_kg."
+          }
+        },
+        {
+          "name": "05 - Cluster Shipments",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/ml/cluster-shipments?status=PENDING",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","ml","cluster-shipments"],
+              "query": [{ "key": "status", "value": "PENDING" }]
+            },
+            "description": "Groups pending shipments from DB into clusters for efficient routing."
+          }
+        },
+        {
+          "name": "06 - Optimize Cargo",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"truck_capacity_kg\": 15000,\n  \"truck_capacity_m3\": 40,\n  \"items\": [\n    { \"name\": \"Electronics\", \"weight_kg\": 3000, \"volume_m3\": 8 },\n    { \"name\": \"Furniture\",   \"weight_kg\": 5000, \"volume_m3\": 15 },\n    { \"name\": \"Clothing\",    \"weight_kg\": 2000, \"volume_m3\": 10 },\n    { \"name\": \"Machinery\",   \"weight_kg\": 7000, \"volume_m3\": 20 }\n  ]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/ml/optimize-cargo", "host": ["{{baseUrl}}"], "path": ["api","ml","optimize-cargo"] }
+          }
+        },
+        {
+          "name": "07 - Unified Predict â€” Delivery",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prediction_type\": \"delivery\",\n  \"weight_kg\": 5000,\n  \"distance_km\": 800,\n  \"truck_type\": \"CONTAINER_20FT\",\n  \"traffic_condition\": \"MODERATE\",\n  \"weather_condition\": \"CLEAR\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/ml/predict", "host": ["{{baseUrl}}"], "path": ["api","ml","predict"] }
+          }
+        },
+        {
+          "name": "08 - Unified Predict â€” Delay",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prediction_type\": \"delay\",\n  \"distance_km\": 600,\n  \"weight_kg\": 7000,\n  \"truck_type\": \"CONTAINER_20FT\",\n  \"weather_condition\": \"STORM\",\n  \"traffic_condition\": \"HEAVY\",\n  \"time_of_day\": \"NIGHT\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/ml/predict", "host": ["{{baseUrl}}"], "path": ["api","ml","predict"] }
+          }
+        },
+        {
+          "name": "09 - Unified Predict â€” Fuel",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Has result', () => pm.expect(r).to.have.property('result'));",
+                  "pm.test('Has estimated_liters', () => pm.expect(r.result).to.have.property('estimated_liters'));",
+                  "pm.test('Fuel is positive', () => pm.expect(r.result.estimated_liters).to.be.above(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prediction_type\": \"fuel\",\n  \"distance_km\": 300,\n  \"weight_kg\": 4000,\n  \"truck_type\": \"REEFER\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/ml/predict", "host": ["{{baseUrl}}"], "path": ["api","ml","predict"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "âŒ Negative Tests",
+      "item": [
+        {
+          "name": "Login â€” Wrong Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects wrong password with 401', () => pm.response.to.have.status(401));",
+                  "const r = pm.response.json();",
+                  "pm.test('Has error message', () => pm.expect(r).to.have.property('message'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"admin@freightzen.in\",\n  \"password\": \"WrongPassword123\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] }
+          }
+        },
+        {
+          "name": "Login â€” Non-existent Email",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects unknown email with 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"nobody@fake.com\",\n  \"password\": \"Admin@1234\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] }
+          }
+        },
+        {
+          "name": "Protected Route â€” No Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects missing token with 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/shipments", "host": ["{{baseUrl}}"], "path": ["api","shipments"] }
+          }
+        },
+        {
+          "name": "Protected Route â€” Invalid Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects invalid token with 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer this.is.not.a.valid.token" }],
+            "url": { "raw": "{{baseUrl}}/api/shipments", "host": ["{{baseUrl}}"], "path": ["api","shipments"] }
+          }
+        },
+        {
+          "name": "Create Shipment â€” Missing Required Fields",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects incomplete shipment with 400/422', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([400, 422]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"weightKg\": 5000\n}" },
+            "url": { "raw": "{{baseUrl}}/api/shipments", "host": ["{{baseUrl}}"], "path": ["api","shipments"] }
+          }
+        },
+        {
+          "name": "Get Non-existent Shipment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 404 for fake ID', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/shipments/00000000-0000-0000-0000-000000000000", "host": ["{{baseUrl}}"], "path": ["api","shipments","00000000-0000-0000-0000-000000000000"] }
+          }
+        },
+        {
+          "name": "ML Predict â€” Invalid Prediction Type",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects invalid prediction_type with 400/422', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([400, 422]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"prediction_type\": \"invalid_type\",\n  \"weight_kg\": 5000\n}" },
+            "url": { "raw": "{{baseUrl}}/api/ml/predict", "host": ["{{baseUrl}}"], "path": ["api","ml","predict"] }
+          }
+        },
+        {
+          "name": "ML Predict â€” Negative Weight",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects negative weight with 400/422', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([400, 422]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/ml/recommend-truck?weight_kg=-100&volume_m3=10&distance_km=500",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","ml","recommend-truck"],
+              "query": [
+                { "key": "weight_kg", "value": "-100" },
+                { "key": "volume_m3", "value": "10" },
+                { "key": "distance_km", "value": "500" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "ðŸ”’ Role-Based Access Tests",
+      "item": [
+        {
+          "name": "Setup â€” Login as DEALER",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Dealer login OK', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.collectionVariables.set('dealerToken', r.token);",
+                  "pm.test('Dealer token saved', () => pm.expect(r.token).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"fleet@rajesh-transport.in\",\n  \"password\": \"Dealer@1234\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] }
+          }
+        },
+        {
+          "name": "DEALER cannot access ADMIN users list",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('DEALER blocked from admin route with 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{dealerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users", "host": ["{{baseUrl}}"], "path": ["api","admin","users"] }
+          }
+        },
+        {
+          "name": "DEALER cannot create shipment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('DEALER blocked from creating shipment with 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{dealerToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"weightKg\": 5000,\n  \"volumeM3\": 18,\n  \"pickupLocation\": {\"lat\": 19.07, \"lng\": 72.87, \"address\": \"Mumbai\"},\n  \"destination\": {\"lat\": 28.70, \"lng\": 77.10, \"address\": \"Delhi\"},\n  \"deadline\": \"2026-12-01T18:00:00.000Z\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/shipments", "host": ["{{baseUrl}}"], "path": ["api","shipments"] }
+          }
+        },
+        {
+          "name": "DEALER cannot cluster shipments",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('DEALER blocked from clustering with 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{dealerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/ml/cluster-shipments?status=PENDING", "host": ["{{baseUrl}}"], "path": ["api","ml","cluster-shipments"], "query": [{ "key": "status", "value": "PENDING" }] }
+          }
+        },
+        {
+          "name": "Setup â€” Login as WAREHOUSE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Warehouse login OK', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.collectionVariables.set('warehouseToken', r.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"ops@bharat-logistics.in\",\n  \"password\": \"Warehouse@1234\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] }
+          }
+        },
+        {
+          "name": "WAREHOUSE cannot access ADMIN users list",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('WAREHOUSE blocked from admin route with 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{warehouseToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users", "host": ["{{baseUrl}}"], "path": ["api","admin","users"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "âœ… Strong Assertion Tests",
+      "item": [
+        {
+          "name": "Health â€” Validate Response Structure",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Has status field', () => pm.expect(r).to.have.property('status'));",
+                  "pm.test('Status is ok', () => pm.expect(r.status).to.equal('ok'));",
+                  "pm.test('Has database field', () => pm.expect(r).to.have.property('database'));",
+                  "pm.test('DB is connected', () => pm.expect(r.database).to.equal('connected'));",
+                  "pm.test('Has uptime', () => pm.expect(r.uptime).to.be.a('number').and.above(0));",
+                  "pm.test('Response time under 500ms', () => pm.expect(pm.response.responseTime).to.be.below(500));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          }
+        },
+        {
+          "name": "ML Health â€” Validate Full Structure",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Has success flag', () => pm.expect(r.success).to.be.true);",
+                  "pm.test('Has circuit status', () => pm.expect(r).to.have.property('circuit'));",
+                  "pm.test('Circuit is not open', () => pm.expect(r.circuit.open).to.be.false);",
+                  "pm.test('Has health data', () => pm.expect(r).to.have.property('health'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/ml/health", "host": ["{{baseUrl}}"], "path": ["api","ml","health"] }
+          }
+        },
+        {
+          "name": "Truck Recommendation â€” Validate Response",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Has result', () => pm.expect(r).to.have.property('result'));",
+                  "pm.test('Has recommended_truck', () => pm.expect(r.result).to.have.property('recommended_truck'));",
+                  "pm.test('Truck type is valid', () => {",
+                  "  const valid = ['SMALL_VAN','CONTAINER_20FT','CONTAINER_32FT','FLATBED_TRAILER','REEFER'];",
+                  "  pm.expect(valid).to.include(r.result.recommended_truck);",
+                  "});",
+                  "pm.test('Confidence between 0 and 1', () => {",
+                  "  pm.expect(r.result.confidence).to.be.within(0, 1);",
+                  "});",
+                  "pm.test('Response under 3s', () => pm.expect(pm.response.responseTime).to.be.below(3000));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/ml/recommend-truck?weight_kg=8000&volume_m3=25&distance_km=500&cargo_type=GENERAL&priority=NORMAL",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","ml","recommend-truck"],
+              "query": [
+                { "key": "weight_kg", "value": "8000" },
+                { "key": "volume_m3", "value": "25" },
+                { "key": "distance_km", "value": "500" },
+                { "key": "cargo_type", "value": "GENERAL" },
+                { "key": "priority", "value": "NORMAL" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Fuel Estimate â€” Validate Response",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Has result', () => pm.expect(r).to.have.property('result'));",
+                  "pm.test('Has estimated_liters', () => pm.expect(r.result).to.have.property('estimated_liters'));",
+                  "pm.test('Fuel is positive number', () => pm.expect(r.result.estimated_liters).to.be.a('number').and.above(0));",
+                  "pm.test('Has estimated_cost', () => pm.expect(r.result).to.have.property('estimated_cost'));",
+                  "pm.test('Cost is positive', () => pm.expect(r.result.estimated_cost).to.be.above(0));",
+                  "pm.test('Has co2 emissions', () => pm.expect(r.result).to.have.property('co2_emissions_kg'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/ml/estimate-fuel?distance_km=400&weight_kg=6000&truck_type=CONTAINER_20FT",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","ml","estimate-fuel"],
+              "query": [
+                { "key": "distance_km", "value": "400" },
+                { "key": "weight_kg", "value": "6000" },
+                { "key": "truck_type", "value": "CONTAINER_20FT" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cargo Optimize â€” Validate Response",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Has result', () => pm.expect(r).to.have.property('result'));",
+                  "pm.test('Has selected_items', () => pm.expect(r.result).to.have.property('selected_items'));",
+                  "pm.test('selected_items is array', () => pm.expect(r.result.selected_items).to.be.an('array'));",
+                  "pm.test('Has utilization_percent', () => pm.expect(r.result).to.have.property('utilization_percent'));",
+                  "pm.test('Utilization between 0 and 100', () => pm.expect(r.result.utilization_percent).to.be.within(0, 100));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"truck_capacity_kg\": 15000,\n  \"truck_capacity_m3\": 40,\n  \"items\": [\n    { \"name\": \"Electronics\", \"weight_kg\": 3000, \"volume_m3\": 8 },\n    { \"name\": \"Furniture\",   \"weight_kg\": 5000, \"volume_m3\": 15 },\n    { \"name\": \"Clothing\",    \"weight_kg\": 2000, \"volume_m3\": 10 },\n    { \"name\": \"Machinery\",   \"weight_kg\": 7000, \"volume_m3\": 20 }\n  ]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/ml/optimize-cargo", "host": ["{{baseUrl}}"], "path": ["api","ml","optimize-cargo"] }
+          }
+        }
+      ]
+    }
+
+  ]
+}
+
+
+

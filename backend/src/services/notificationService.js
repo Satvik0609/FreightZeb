@@ -1,0 +1,106 @@
+/**
+ * NOTIFICATION SERVICE
+ * Handles in-app notifications stored in DB + real-time socket push.
+ * Email notifications are delegated to emailService.
+ */
+
+const { prisma } = require('../config/db');
+const logger = require('../config/logger');
+
+/**
+ * Create a notification record and push it via socket.io.
+ * @param {object} io         - socket.io server instance
+ * @param {object} params
+ * @param {string} params.userId
+ * @param {string} params.type  - e.g. 'BOOKING_REQUESTED', 'BOOKING_APPROVED', etc.
+ * @param {string} params.title
+ * @param {string} params.message
+ * @param {object} [params.meta] - extra data (bookingId, shipmentId, etc.)
+ */
+async function send(io, { userId, type, title, message, meta = {} }) {
+    try {
+        const notification = await prisma.notification.create({
+            data: { userId, type, title, message, meta },
+        });
+
+        // Push to user's personal socket room
+        if (io) {
+            io.to(`user:${userId}`).emit('notification:new', notification);
+        }
+
+        return notification;
+    } catch (err) {
+        logger.error(`Notification failed for user ${userId}: ${err.message}`);
+    }
+}
+
+/**
+ * Convenience wrappers for common events
+ */
+async function bookingRequested(io, { dealerId, bookingId, shipmentId, warehouseName }) {
+    return send(io, {
+        userId: dealerId,
+        type: 'BOOKING_REQUESTED',
+        title: 'New Booking Request',
+        message: `${warehouseName} has requested a booking for shipment.`,
+        meta: { bookingId, shipmentId },
+    });
+}
+
+async function bookingApproved(io, { warehouseId, bookingId, truckRegNo }) {
+    return send(io, {
+        userId: warehouseId,
+        type: 'BOOKING_APPROVED',
+        title: 'Booking Approved',
+        message: `Your booking has been approved. Truck: ${truckRegNo}`,
+        meta: { bookingId },
+    });
+}
+
+async function bookingRejected(io, { warehouseId, bookingId }) {
+    return send(io, {
+        userId: warehouseId,
+        type: 'BOOKING_REJECTED',
+        title: 'Booking Rejected',
+        message: 'Your booking request was rejected by the dealer.',
+        meta: { bookingId },
+    });
+}
+
+async function shipmentPickedUp(io, { warehouseId, bookingId, shipmentId }) {
+    return send(io, {
+        userId: warehouseId,
+        type: 'SHIPMENT_PICKED_UP',
+        title: 'Shipment Picked Up',
+        message: 'Your shipment has been picked up and is on the way.',
+        meta: { bookingId, shipmentId },
+    });
+}
+
+async function shipmentDelivered(io, { warehouseId, dealerId, bookingId, shipmentId }) {
+    await Promise.all([
+        send(io, {
+            userId: warehouseId,
+            type: 'SHIPMENT_DELIVERED',
+            title: 'Shipment Delivered',
+            message: 'Your shipment has been successfully delivered.',
+            meta: { bookingId, shipmentId },
+        }),
+        send(io, {
+            userId: dealerId,
+            type: 'TRIP_COMPLETED',
+            title: 'Trip Completed',
+            message: 'A delivery trip has been completed successfully.',
+            meta: { bookingId, shipmentId },
+        }),
+    ]);
+}
+
+module.exports = {
+    send,
+    bookingRequested,
+    bookingApproved,
+    bookingRejected,
+    shipmentPickedUp,
+    shipmentDelivered,
+};

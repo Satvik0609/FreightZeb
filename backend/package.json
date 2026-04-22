@@ -1,0 +1,53 @@
+{
+  "name": "freightzeb-backend",
+  "version": "1.0.0",
+  "description": "FreightZeb logistics platform API",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node --require dotenv/config src/server.js",
+    "dev": "nodemon --require dotenv/config src/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "node prisma/seed.js",
+    "setup:dev": "npm install && npx prisma generate && npx prisma db push && node prisma/seed.js",
+    "docker:build": "docker build -t freightzeb-api .",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f api",
+    "docker:migrate": "docker-compose run --rm migrate"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "axios": "^1.15.0",
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.3.2",
+    "express-validator": "^7.3.2",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.1",
+    "multer": "^2.1.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^8.0.5",
+    "socket.io": "^4.7.5",
+    "uuid": "^13.0.0",
+    "winston": "^3.14.2"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "nodemon": "^3.1.4",
+    "prisma": "^5.20.0"
+  }
+}

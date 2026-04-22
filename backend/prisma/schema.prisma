@@ -1,0 +1,279 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// MODULE 1 — AUTH & RBAC
+// ─────────────────────────────────────────────
+model User {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  password            String
+  name                String
+  role                Role      @default(WAREHOUSE)
+  phone               String?
+  company             String?
+  avatarUrl           String?   // profile photo path
+  passwordResetToken  String?
+  passwordResetExpiry DateTime?
+  passwordChangedAt   DateTime?
+  isActive            Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  shipments           Shipment[]     @relation("WarehouseShipments")
+  trucks              Truck[]        @relation("DealerTrucks")
+  bookingsAsWarehouse Booking[]      @relation("WarehouseBookings")
+  bookingsAsDealer    Booking[]      @relation("DealerBookings")
+  notifications       Notification[]
+  invoices            Invoice[]      @relation("InvoiceUser")
+
+  // Admin search: role filter, active filter
+  @@index([role])
+  @@index([isActive])
+}
+
+enum Role {
+  ADMIN
+  WAREHOUSE
+  DEALER
+}
+
+// ─────────────────────────────────────────────
+// MODULE 3 — SHIPMENT MANAGEMENT
+// ─────────────────────────────────────────────
+model Shipment {
+  id             String         @id @default(uuid())
+  warehouseId    String
+  weightKg       Float
+  volumeM3       Float?
+  boxes          Int?
+  pickupLocation Json           // { lat, lng, address, city, pincode }
+  destination    Json           // { lat, lng, address, city, pincode }
+  deadline       DateTime?
+  description    String?
+  requirements   Json?          // { hazardous, fragile, tempControlled, oversized, documents: [] }
+  status         ShipmentStatus @default(PENDING)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  warehouse   User         @relation("WarehouseShipments", fields: [warehouseId], references: [id])
+  bookings    Booking[]
+  predictions Prediction[]
+
+  // Hot paths: getMyShipments, status filters, consolidation query, date range
+  @@index([warehouseId])
+  @@index([status])
+  @@index([warehouseId, status])
+  @@index([createdAt])
+}
+
+enum ShipmentStatus {
+  PENDING
+  OPTIMIZED
+  BOOKED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// MODULE 4 — TRUCK / FLEET MANAGEMENT
+// ─────────────────────────────────────────────
+model Truck {
+  id              String      @id @default(uuid())
+  dealerId        String
+  registrationNo  String      @unique
+  truckType       TruckType
+  capacityKg      Float
+  capacityM3      Float?
+  routeFrom       String
+  routeTo         String
+  availability    Boolean     @default(true)
+  pricePerKm      Float?
+  currentLocation Json?       // { lat, lng, lastUpdated }
+  status          TruckStatus @default(AVAILABLE)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  dealer       User          @relation("DealerTrucks", fields: [dealerId], references: [id])
+  bookings     Booking[]
+  trackingLogs TrackingLog[]
+
+  // Hot paths: getMyTrucks, getAvailableTrucks (status+availability), optimization scoring
+  @@index([dealerId])
+  @@index([status])
+  @@index([status, availability])
+  @@index([dealerId, status])
+}
+
+enum TruckType {
+  SMALL_VAN
+  CONTAINER_20FT
+  CONTAINER_32FT
+  FLATBED_TRAILER
+  REEFER
+}
+
+enum TruckStatus {
+  AVAILABLE
+  BOOKED
+  IN_TRANSIT
+  MAINTENANCE
+}
+
+// ─────────────────────────────────────────────
+// MODULE 6 — BOOKING & TRIP LIFECYCLE
+// ─────────────────────────────────────────────
+model Booking {
+  id              String        @id @default(uuid())
+  shipmentId      String
+  truckId         String
+  warehouseId     String
+  dealerId        String
+  status          BookingStatus @default(REQUESTED)
+  optimScore      Float?
+  distanceKm      Float?
+  pricing         Json?         // full pricing breakdown
+  estimatedEta    DateTime?
+  pickedUpAt      DateTime?
+  deliveredAt     DateTime?
+  notes           String?
+  proofOfDelivery Json?         // { photos: [url], signature: url, notes: string, submittedAt: DateTime }
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  shipment  Shipment @relation(fields: [shipmentId], references: [id])
+  truck     Truck    @relation(fields: [truckId], references: [id])
+  warehouse User     @relation("WarehouseBookings", fields: [warehouseId], references: [id])
+  dealer    User     @relation("DealerBookings", fields: [dealerId], references: [id])
+
+  trackingLogs TrackingLog[]
+  invoice      Invoice?
+
+  // Hot paths: getMyBookings, getDealerBookings, updateBookingStatus, cancelShipment open-booking lookup
+  @@index([shipmentId])
+  @@index([truckId])
+  @@index([warehouseId])
+  @@index([dealerId])
+  @@index([status])
+  @@index([warehouseId, status])
+  @@index([dealerId, status])
+}
+
+enum BookingStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// MODULE 7 — TRACKING
+// ─────────────────────────────────────────────
+model TrackingLog {
+  id        String   @id @default(uuid())
+  bookingId String
+  truckId   String
+  latitude  Float
+  longitude Float
+  status    String?
+  timestamp DateTime @default(now())
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+  truck   Truck   @relation(fields: [truckId], references: [id])
+
+  // CRITICAL: called on every GPS push — without these, tracking is O(n) per ping
+  @@index([bookingId])
+  @@index([truckId])
+  @@index([bookingId, timestamp])
+}
+
+// ─────────────────────────────────────────────
+// MODULE 8 — NOTIFICATIONS
+// ─────────────────────────────────────────────
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String   // e.g. BOOKING_REQUESTED, SHIPMENT_DELIVERED
+  title     String
+  message   String
+  meta      Json?    // { bookingId, shipmentId, ... }
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  // Hot paths: getMyNotifications (userId+isRead), markAllRead, cron cleanup (createdAt)
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────
+// MODULE — INVOICING
+// ─────────────────────────────────────────────
+model Invoice {
+  id        String        @id @default(uuid())
+  bookingId String        @unique
+  userId    String        // billed to (warehouse)
+  invoiceNo String        @unique
+  pricing   Json
+  status    InvoiceStatus @default(PENDING)
+  issuedAt  DateTime      @default(now())
+  paidAt    DateTime?
+  dueDate   DateTime?
+  notes     String?
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+  user    User    @relation("InvoiceUser", fields: [userId], references: [id])
+
+  // Hot paths: getMyInvoices, getAllInvoices status filter, cron overdue check
+  @@index([userId])
+  @@index([status])
+  @@index([userId, status])
+  @@index([dueDate])
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// MODULE 9 — AI / PREDICTIONS
+// ─────────────────────────────────────────────
+model Prediction {
+  id           String         @id @default(uuid())
+  shipmentId   String
+  type         PredictionType
+  value        Float
+  confidence   Float?
+  modelVersion String?
+  createdAt    DateTime       @default(now())
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id])
+
+  // Hot path: getWarehouseAnalytics, deleteMany before re-predict
+  @@index([shipmentId])
+  @@index([shipmentId, type])
+}
+
+enum PredictionType {
+  ETA_HOURS
+  DELAY_RISK_PERCENT
+  RECOMMENDED_TRUCK_SCORE
+  FUEL_ESTIMATE_LITERS
+  CO2_KG
+}

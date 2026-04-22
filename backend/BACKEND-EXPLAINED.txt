@@ -1,0 +1,1531 @@
+================================================================================
+  FREIGHTZEN BACKEND — COMPLETE CODE EXPLANATION
+  Node.js + Express + Prisma + PostgreSQL + Socket.io
+================================================================================
+
+TABLE OF CONTENTS
+-----------------
+1.  Project Overview
+2.  Directory Structure
+3.  Environment Variables (.env)
+4.  Entry Point — server.js
+5.  Configuration Layer (src/config/)
+    5.1  env.js       — ENV validation
+    5.2  db.js        — Prisma / PostgreSQL connection
+    5.3  logger.js    — Winston logger
+6.  Database Schema (prisma/schema.prisma)
+    6.1  User
+    6.2  Shipment
+    6.3  Truck
+    6.4  Booking
+    6.5  TrackingLog
+    6.6  Notification
+    6.7  Invoice
+    6.8  Prediction
+7.  Middleware (src/middleware/)
+    7.1  authMiddleware.js  — JWT guard + RBAC
+    7.2  errorMiddleware.js — Global error handler
+    7.3  rateLimiter.js     — Rate limiting
+    7.4  upload.js          — Multer file upload
+    7.5  validate.js        — express-validator runner
+    7.6  requestId.js       — Request ID tracing
+8.  Routes (src/routes/)
+9.  Controllers (src/controllers/)
+    9.1  authController.js
+    9.2  truckController.js
+    9.3  shipmentController.js
+    9.4  bookingController.js
+    9.5  trackingController.js
+    9.6  invoiceController.js
+    9.7  notificationController.js
+    9.8  analyticsController.js
+    9.9  adminController.js
+    9.10 mlController.js
+    9.11 uploadController.js
+10. Services (src/services/)
+    10.1  emailService.js
+    10.2  notificationService.js
+    10.3  mlService.js
+    10.4  optimizationService.js
+    10.5  pricingService.js
+    10.6  routeService.js
+    10.7  cronService.js
+    10.8  shipmentService.js
+    10.9  consolidationService.js
+    10.10 loadingService.js
+11. Validators (src/validators/)
+12. Real-time (Socket.io)
+13. Request / Response Flow (end-to-end example)
+14. Auth & Role-Based Access Control
+15. Booking Lifecycle State Machine
+16. ML Service Integration & Fallbacks
+17. Background Jobs (Cron)
+18. Error Handling Strategy
+19. File Upload System
+20. API Quick Reference (all endpoints)
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+FreightZen is a logistics SaaS platform connecting:
+  - WAREHOUSE users  → create shipments, request bookings
+  - DEALER users     → register trucks, accept/manage bookings, track deliveries
+  - ADMIN            → full platform oversight
+
+The backend is a REST API built with:
+  - Node.js + Express                → HTTP server
+  - Prisma ORM + PostgreSQL          → data persistence
+  - Socket.io                        → real-time events (tracking, notifications)
+  - JWT                              → stateless authentication
+  - bcryptjs                         → password hashing
+  - Winston                          → structured logging
+  - node-cron                        → background task scheduling
+  - Multer                           → file upload handling
+  - Python FastAPI ML service        → predictions (optional, has fallbacks)
+
+No paid third-party APIs are required. Everything runs locally.
+
+================================================================================
+2. DIRECTORY STRUCTURE
+================================================================================
+
+freightzen/
+  backend/
+    src/
+      config/
+        env.js          ← ENV validation (runs first on startup)
+        db.js           ← Prisma client + connect/disconnect
+        logger.js       ← Winston logger setup
+      controllers/
+        authController.js
+        truckController.js
+        shipmentController.js
+        bookingController.js
+        trackingController.js
+        invoiceController.js
+        notificationController.js
+        analyticsController.js
+        adminController.js
+        mlController.js
+        uploadController.js
+        consolidationController.js
+        loadingController.js
+      middleware/
+        authMiddleware.js   ← protect() + restrictTo()
+        errorMiddleware.js  ← notFound + errorHandler
+        rateLimiter.js      ← express-rate-limit
+        upload.js           ← multer disk storage
+        validate.js         ← runs express-validator results
+        requestId.js        ← attaches UUID to each request
+      routes/
+        authRoutes.js
+        truckRoutes.js
+        shipmentRoutes.js
+        bookingRoutes.js
+        trackingRoutes.js
+        invoiceRoutes.js
+        notificationRoutes.js
+        analyticsRoutes.js
+        adminRoutes.js
+        mlRoutes.js
+        uploadRoutes.js
+        consolidationRoutes.js
+        loadingRoutes.js
+      services/
+        emailService.js
+        notificationService.js
+        mlService.js
+        optimizationService.js
+        pricingService.js
+        routeService.js
+        cronService.js
+        shipmentService.js
+        consolidationService.js
+        loadingService.js
+      validators/
+        authValidators.js
+        truckValidators.js
+        shipmentValidators.js
+        bookingValidators.js
+        trackingValidators.js
+        loadingValidators.js
+        consolidationValidators.js
+      server.js            ← main entry point
+    prisma/
+      schema.prisma        ← database models
+      seed.js              ← demo data seeder
+    uploads/               ← locally stored files
+    .env.example           ← template for environment variables
+    package.json
+
+================================================================================
+3. ENVIRONMENT VARIABLES (.env)
+================================================================================
+
+Required (app crashes without these):
+  DATABASE_URL  → PostgreSQL connection string
+                  Example: postgresql://user:pass@localhost:5432/freightzeb
+  JWT_SECRET    → Minimum 32 characters. Used to sign JWT tokens.
+                  Generate: openssl rand -hex 32
+
+Optional (defaults applied if missing):
+  PORT          → default 5000
+  NODE_ENV      → default "development"
+  JWT_EXPIRES_IN → default "7d"
+  FRONTEND_URL  → default "http://localhost:3000" (used for CORS)
+  ML_SERVICE_URL → default "http://localhost:8000" (Python ML service)
+
+Email (SMTP — all optional, emails log to console in dev if not set):
+  SMTP_HOST / SMTP_PORT / SMTP_SECURE
+  SMTP_USER / SMTP_PASS / SMTP_FROM
+
+Docker only:
+  POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+
+================================================================================
+4. ENTRY POINT — server.js
+================================================================================
+
+Execution order on startup:
+
+  1. require('dotenv').config()         → loads .env into process.env
+  2. validateEnv()                      → crashes early if required vars missing
+  3. Create Express app + HTTP server
+  4. Create Socket.io server attached to HTTP server
+  5. Apply security middleware:
+       helmet()        → sets HTTP security headers
+       compression()   → gzip responses
+       cors()          → allow FRONTEND_URL or * in dev
+       express.json()  → parse JSON bodies up to 2MB
+  6. Apply utility middleware:
+       requestId       → UUID per request for log tracing
+       morgan          → HTTP access logs via Winston
+  7. Serve /uploads as static files
+  8. Apply rate limiting to all /api/* routes
+  9. Share io instance: app.set('io', io)
+  10. Register health check: GET /health
+  11. Mount 13 route modules under /api/*
+  12. Register 404 handler + global error handler
+  13. Setup Socket.io connection handler (join/leave rooms)
+  14. bootstrap() → connectDB() → startAllJobs() → listen on PORT
+
+Graceful shutdown:
+  - SIGTERM / SIGINT → closes HTTP server, disconnects DB, exits cleanly
+  - Force exits after 10 seconds if connections don't close
+
+================================================================================
+5. CONFIGURATION LAYER
+================================================================================
+
+────────────────────────────────────────
+5.1  src/config/env.js
+────────────────────────────────────────
+
+WHAT IT DOES:
+  Validates required environment variables BEFORE any other code runs.
+  If DATABASE_URL or JWT_SECRET are missing → prints error → process.exit(1)
+  If JWT_SECRET < 32 chars → crashes
+  Applies default values to optional vars so the rest of the app
+  can safely read process.env.PORT etc. without null checks.
+
+WHY IT MATTERS:
+  Failing fast at boot is better than mysterious runtime errors later.
+  Called as the FIRST thing in server.js.
+
+CODE:
+  const REQUIRED = ['DATABASE_URL', 'JWT_SECRET'];
+
+  function validateEnv() {
+    const missing = REQUIRED.filter(key => !process.env[key]);
+    if (missing.length > 0) { console.error(...); process.exit(1); }
+    // Apply optional defaults
+    Object.entries(OPTIONAL_DEFAULTS).forEach(([key, val]) => {
+      if (!process.env[key]) process.env[key] = val;
+    });
+    if (process.env.JWT_SECRET.length < 32) process.exit(1);
+  }
+
+────────────────────────────────────────
+5.2  src/config/db.js
+────────────────────────────────────────
+
+WHAT IT DOES:
+  Creates a singleton PrismaClient instance used by all controllers/services.
+  In development: logs any query taking > 500ms as a slow query warning.
+  Exports connectDB() and disconnectDB() used by server.js bootstrap.
+
+HOW PRISMA WORKS:
+  Prisma is an ORM (Object Relational Mapper).
+  Instead of writing raw SQL, you write:
+    await prisma.user.findUnique({ where: { email } })
+  Prisma translates this to SQL and returns typed JS objects.
+
+CODE KEY PARTS:
+  const prisma = new PrismaClient({ log: [...], errorFormat: 'minimal' });
+  prisma.$on('query', (e) => { if (e.duration > 500) logger.warn(...) });
+  async function connectDB() { await prisma.$connect(); }
+  module.exports = { prisma, connectDB, disconnectDB };
+
+────────────────────────────────────────
+5.3  src/config/logger.js
+────────────────────────────────────────
+
+WHAT IT DOES:
+  Creates a Winston logger that writes structured JSON logs.
+  In development: also prints colored readable output to console.
+  Files:
+    logs/error.log      → only ERROR level, max 10MB × 5 rotations
+    logs/combined.log   → all levels, max 20MB × 10 rotations
+    logs/exceptions.log → uncaught exceptions
+    logs/rejections.log → unhandled promise rejections
+
+USAGE ACROSS CODEBASE:
+  const logger = require('../config/logger');
+  logger.info('User registered');
+  logger.warn('ML service unavailable — using fallback');
+  logger.error('DB connection failed', { stack: err.stack });
+
+================================================================================
+6. DATABASE SCHEMA (prisma/schema.prisma)
+================================================================================
+
+All IDs are UUIDs (auto-generated). All timestamps are UTC DateTime.
+
+────────────────────────────────────────
+6.1  User model
+────────────────────────────────────────
+
+Fields:
+  id                  UUID primary key
+  email               unique, used for login
+  password            bcrypt hash (never stored as plain text)
+  name                display name
+  role                enum: ADMIN | WAREHOUSE | DEALER
+  phone               optional
+  company             optional
+  avatarUrl           optional, path to uploaded avatar file
+  passwordResetToken  SHA-256 hash of reset token (not the raw token)
+  passwordResetExpiry DateTime, 1 hour after token creation
+  isActive            boolean, admin can deactivate accounts
+  createdAt/updatedAt auto-managed
+
+Relations:
+  shipments           → Shipment[] (as warehouse owner)
+  trucks              → Truck[]   (as dealer owner)
+  bookingsAsWarehouse → Booking[] (shipments I booked)
+  bookingsAsDealer    → Booking[] (my trucks were booked)
+  notifications       → Notification[]
+  invoices            → Invoice[]  (billed to this user)
+
+────────────────────────────────────────
+6.2  Shipment model
+────────────────────────────────────────
+
+Fields:
+  id              UUID
+  warehouseId     FK → User (the warehouse that created it)
+  weightKg        float, required
+  volumeM3        float, optional
+  boxes           int, optional
+  pickupLocation  JSON: { lat, lng, address, city, pincode }
+  destination     JSON: { lat, lng, address, city, pincode }
+  deadline        optional DateTime
+  description     optional text
+  requirements    optional JSON: { hazardous, fragile, tempControlled, oversized }
+  status          enum: PENDING | OPTIMIZED | BOOKED | IN_TRANSIT | DELIVERED | CANCELLED
+
+Relations:
+  warehouse  → User
+  bookings   → Booking[]
+  predictions → Prediction[]
+
+────────────────────────────────────────
+6.3  Truck model
+────────────────────────────────────────
+
+Fields:
+  id              UUID
+  dealerId        FK → User (dealer who owns it)
+  registrationNo  unique string (e.g. "MH12AB1234")
+  truckType       enum: SMALL_VAN | CONTAINER_20FT | CONTAINER_32FT | FLATBED_TRAILER | REEFER
+  capacityKg      float
+  capacityM3      optional float
+  routeFrom       string (source city)
+  routeTo         string (destination city)
+  availability    boolean flag
+  pricePerKm      optional float (₹/km, overrides system rates)
+  currentLocation JSON: { lat, lng, lastUpdated }  — updated via GPS endpoint
+  status          enum: AVAILABLE | BOOKED | IN_TRANSIT | MAINTENANCE
+
+Relations:
+  dealer       → User
+  bookings     → Booking[]
+  trackingLogs → TrackingLog[]
+
+────────────────────────────────────────
+6.4  Booking model
+────────────────────────────────────────
+
+Fields:
+  id           UUID
+  shipmentId   FK → Shipment
+  truckId      FK → Truck
+  warehouseId  FK → User (who requested booking)
+  dealerId     FK → User (whose truck it is)
+  status       enum: REQUESTED | APPROVED | REJECTED | ASSIGNED | PICKED_UP | IN_TRANSIT | DELIVERED | CANCELLED
+  optimScore   optional float 0-1 (from optimization engine)
+  distanceKm   computed on creation via Haversine formula
+  pricing      JSON: full pricing breakdown (baseCharge, gst, total, etc.)
+  estimatedEta DateTime computed on creation
+  pickedUpAt   set when status → PICKED_UP
+  deliveredAt  set when status → DELIVERED
+  notes        optional text
+  proofOfDelivery JSON: { photos: [url], signature: url, submittedAt }
+
+Relations:
+  shipment     → Shipment
+  truck        → Truck
+  warehouse    → User
+  dealer       → User
+  trackingLogs → TrackingLog[]
+  invoice      → Invoice (auto-created on DELIVERED)
+
+────────────────────────────────────────
+6.5  TrackingLog model
+────────────────────────────────────────
+
+Fields:
+  id         UUID
+  bookingId  FK → Booking
+  truckId    FK → Truck
+  latitude   float
+  longitude  float
+  status     optional string (human-readable note e.g. "Near Nagpur")
+  timestamp  auto set to now()
+
+One row per GPS ping. History is queryable by bookingId.
+
+────────────────────────────────────────
+6.6  Notification model
+────────────────────────────────────────
+
+Fields:
+  id        UUID
+  userId    FK → User (recipient)
+  type      string constant e.g. "BOOKING_REQUESTED", "SHIPMENT_DELIVERED"
+  title     short heading
+  message   full text
+  meta      optional JSON: { bookingId, shipmentId }
+  isRead    boolean default false
+  createdAt auto
+
+────────────────────────────────────────
+6.7  Invoice model
+────────────────────────────────────────
+
+Fields:
+  id        UUID
+  bookingId unique FK → Booking (one invoice per booking)
+  userId    FK → User (billed to warehouse)
+  invoiceNo unique string e.g. "INV-1713200000000"
+  pricing   JSON (copied from Booking.pricing at time of delivery)
+  status    enum: PENDING | PAID | OVERDUE | CANCELLED
+  issuedAt  auto (now)
+  paidAt    set by admin via PATCH /api/invoices/:id/pay
+  dueDate   7 days after issuedAt
+  notes     optional
+
+Auto-created when booking status changes to DELIVERED (inside DB transaction).
+
+────────────────────────────────────────
+6.8  Prediction model
+────────────────────────────────────────
+
+Fields:
+  id           UUID
+  shipmentId   FK → Shipment
+  type         enum: ETA_HOURS | DELAY_RISK_PERCENT | RECOMMENDED_TRUCK_SCORE | FUEL_ESTIMATE_LITERS | CO2_KG
+  value        float
+  confidence   optional float 0-1
+  modelVersion optional string
+
+Populated by the runOptimization endpoint. Stores ML predictions alongside shipments.
+
+================================================================================
+7. MIDDLEWARE
+================================================================================
+
+────────────────────────────────────────
+7.1  src/middleware/authMiddleware.js
+────────────────────────────────────────
+
+protect(req, res, next):
+  - Reads Authorization header: "Bearer <token>"
+  - Verifies JWT using process.env.JWT_SECRET
+  - On success: attaches decoded { id, email, role } to req.user, calls next()
+  - On failure: 401 Unauthorized
+
+restrictTo(...roles):
+  - Returns a middleware function
+  - Checks if req.user.role is in the allowed roles array
+  - On success: calls next()
+  - On failure: 403 Forbidden with message "Required role: X or Y"
+
+Usage in routes:
+  router.post('/', protect, restrictTo('WAREHOUSE', 'ADMIN'), createShipment);
+
+────────────────────────────────────────
+7.2  src/middleware/errorMiddleware.js
+────────────────────────────────────────
+
+notFound(req, res, next):
+  - Catches any route that wasn't matched
+  - Creates a 404 error and forwards to errorHandler
+
+errorHandler(err, req, res, next):
+  - Central error handler for the whole app
+  - Handles specific Prisma error codes:
+      P2002 → 409 "A record with this value already exists" (unique constraint)
+      P2025 → 404 "Record not found"
+      P2003 → 400 "Related record not found" (foreign key violation)
+  - In production: hides internal error messages (shows "Internal server error")
+  - In development: exposes full stack trace in response
+  - Logs all 500 errors with full context to Winston
+
+────────────────────────────────────────
+7.3  src/middleware/rateLimiter.js
+────────────────────────────────────────
+
+authLimiter:
+  - Applied to: POST /api/auth/register, /api/auth/login, /api/auth/forgot-password
+  - Limit: 20 requests per 15 minutes per IP
+  - Prevents brute force attacks on auth endpoints
+
+apiLimiter:
+  - Applied to: all /api/* routes
+  - Limit: 100 requests per minute per IP
+  - Returns 429 Too Many Requests when exceeded
+
+────────────────────────────────────────
+7.4  src/middleware/upload.js
+────────────────────────────────────────
+
+Built on Multer. Saves files to local disk (backend/uploads/).
+
+Allowed file types: jpeg, jpg, png, webp, pdf
+Max file size: 5MB
+
+Storage structure:
+  uploads/
+    avatars/           ← user profile photos
+    proof-of-delivery/ ← delivery evidence photos + signatures
+    documents/         ← shipment PDFs
+
+Each file gets a unique name: {timestamp}-{random}.ext
+
+Three middleware factories (set req.uploadFolder):
+  proofOfDeliveryUpload → folder = "proof-of-delivery"
+  avatarUpload          → folder = "avatars"
+  documentUpload        → folder = "documents"
+
+────────────────────────────────────────
+7.5  src/middleware/validate.js
+────────────────────────────────────────
+
+Runs express-validator's validationResult(req).
+If there are errors → returns 422 with array of field errors + messages.
+If no errors → calls next().
+
+Usage after validator arrays in routes:
+  router.post('/', authLimiter, registerRules, validate, register);
+
+────────────────────────────────────────
+7.6  src/middleware/requestId.js
+────────────────────────────────────────
+
+Attaches a UUID to each incoming request as req.requestId.
+Also sets the X-Request-ID response header.
+Used in error responses and logs for cross-referencing.
+
+================================================================================
+8. ROUTES
+================================================================================
+
+All routes are mounted in server.js under /api/*
+
+  /api/auth          → authRoutes.js
+  /api/shipments     → shipmentRoutes.js + consolidationRoutes.js
+  /api/trucks        → truckRoutes.js + loadingRoutes.js
+  /api/bookings      → bookingRoutes.js
+  /api/tracking      → trackingRoutes.js
+  /api/analytics     → analyticsRoutes.js
+  /api/notifications → notificationRoutes.js
+  /api/invoices      → invoiceRoutes.js
+  /api/admin         → adminRoutes.js
+  /api/uploads       → uploadRoutes.js
+  /api/ml            → mlRoutes.js
+  /health            → inline in server.js (no /api prefix)
+
+ROUTE DESIGN PATTERNS:
+  1. Named/specific paths ALWAYS before parameterised paths
+     e.g. GET /my and GET /available must come before GET /:id
+     because Express matches top-to-bottom and /:id would consume "my"
+  
+  2. router.use(protect) / router.use(protect, restrictTo('ADMIN'))
+     applies middleware to ALL subsequent routes in that router
+  
+  3. Validators run before controllers:
+     router.post('/', protect, restrictTo('WAREHOUSE'), createShipmentRules, validate, createShipment)
+
+AUTH ROUTES  (/api/auth)
+  POST   /register        → register (no auth, rate limited)
+  POST   /login           → login (no auth, rate limited)
+  POST   /forgot-password → forgotPassword (no auth, rate limited)
+  POST   /reset-password  → resetPassword (no auth)
+  GET    /me              → getMe (protected)
+  PATCH  /me              → updateMe (protected)
+  PATCH  /me/password     → changePassword (protected)
+
+TRUCK ROUTES  (/api/trucks)
+  POST   /                → createTruck (DEALER, ADMIN)
+  GET    /my              → getMyTrucks (DEALER)
+  GET    /available       → getAvailableTrucks (any auth)
+  GET    /                → getAllTrucks (ADMIN)
+  GET    /:id             → getTruck (any auth)
+  PATCH  /:id             → updateTruck (owner DEALER or ADMIN)
+  PATCH  /:id/location    → updateTruckLocation (DEALER, ADMIN)
+  DELETE /:id             → deleteTruck (ADMIN)
+  POST   /optimize-loading → optimizeLoading (any auth)
+
+SHIPMENT ROUTES  (/api/shipments)
+  POST   /                → createShipment (WAREHOUSE, ADMIN)
+  GET    /my              → getMyShipments (WAREHOUSE)
+  GET    /                → getAllShipments (ADMIN)
+  GET    /:id             → getShipment (owner or ADMIN)
+  PATCH  /:id/cancel      → cancelShipment (owner or ADMIN)
+  POST   /:id/optimize    → runOptimization (WAREHOUSE, ADMIN)
+  GET    /consolidate     → getShipmentConsolidation (any auth)
+
+BOOKING ROUTES  (/api/bookings)
+  POST   /                → createBooking (WAREHOUSE, ADMIN)
+  GET    /my              → getMyBookings (WAREHOUSE)
+  GET    /dealer          → getDealerBookings (DEALER)
+  GET    /                → getAllBookings (ADMIN)
+  GET    /:id             → getBooking (involved parties or ADMIN)
+  PATCH  /:id/status      → updateBookingStatus (role-gated by status)
+
+TRACKING ROUTES  (/api/tracking)
+  POST   /update          → pushLocation (DEALER, ADMIN)
+  GET    /:bookingId       → getTrackingHistory (any auth)
+  GET    /:bookingId/latest → getLatestLocation (any auth)
+
+ANALYTICS ROUTES  (/api/analytics)
+  GET    /warehouse       → getWarehouseAnalytics (WAREHOUSE, ADMIN)
+  GET    /dealer          → getDealerAnalytics (DEALER, ADMIN)
+  GET    /admin           → getAdminAnalytics (ADMIN)
+
+NOTIFICATION ROUTES  (/api/notifications)
+  GET    /                → getMyNotifications (any auth)
+  PATCH  /read-all        → markAllRead (any auth)
+  PATCH  /:id/read        → markRead (any auth)
+  DELETE /:id             → deleteNotification (any auth)
+
+INVOICE ROUTES  (/api/invoices)
+  GET    /my              → getMyInvoices (WAREHOUSE, ADMIN)
+  GET    /                → getAllInvoices (ADMIN)
+  GET    /:id             → getInvoice (any auth)
+  PATCH  /:id/pay         → markPaid (ADMIN)
+  PATCH  /:id/cancel      → cancelInvoice (ADMIN)
+
+ADMIN ROUTES  (/api/admin)
+  All routes require ADMIN role
+  GET    /users           → getAllUsers
+  GET    /users/:id       → getUser
+  PATCH  /users/:id/role  → updateUserRole
+  PATCH  /users/:id/toggle → toggleUserActive
+  DELETE /users/:id       → deleteUser
+
+UPLOAD ROUTES  (/api/uploads)
+  POST   /proof/:bookingId   → uploadProofOfDelivery (DEALER, ADMIN) [multipart]
+  GET    /proof/:bookingId   → getProofOfDelivery (any auth)
+  POST   /avatar             → uploadAvatar (any auth) [multipart]
+  DELETE /avatar             → deleteAvatar (any auth)
+  POST   /document/:shipmentId → uploadShipmentDocument (WAREHOUSE, ADMIN) [multipart]
+
+ML ROUTES  (/api/ml)
+  GET    /health             → getMlHealth (no auth)
+  GET    /models/info        → getModelsInfo (no auth)
+  POST   /predict            → predictAll [auth required from here]
+  GET    /recommend-truck    → getTruckRecommendation
+  GET    /predict-delivery/:shipmentId → predictDeliveryTime
+  GET    /cluster-shipments  → clusterShipments
+  GET    /predict-delay/:shipmentId   → predictDelayRisk
+  GET    /estimate-fuel      → estimateFuel
+  POST   /optimize-cargo     → optimizeCargo
+
+================================================================================
+9. CONTROLLERS
+================================================================================
+
+Controllers contain the actual business logic for each route.
+They receive (req, res, next), do DB operations, call services, and respond.
+All errors are forwarded to next(err) for the global error handler.
+
+────────────────────────────────────────
+9.1  authController.js
+────────────────────────────────────────
+
+register(req, res, next):
+  1. Check if email already exists → 409 if so
+  2. Hash password with bcrypt (cost factor 12)
+  3. Create user in DB
+  4. Sign JWT token (contains id, email, role)
+  5. Send welcome email (async, non-blocking)
+  6. Return 201 with token and user object
+
+login(req, res, next):
+  1. Find user by email → 401 if not found or not active
+  2. Compare submitted password with bcrypt hash → 401 if mismatch
+  3. Sign JWT token
+  4. Return 200 with token and user object
+
+getMe(req, res, next):
+  - Fetches full user by req.user.id (set by protect middleware)
+  - Returns user without password field
+  - Uses Prisma select to whitelist returned fields
+
+updateMe(req, res, next):
+  - Only allows changing: name, phone, company
+  - Email and role cannot be changed here (admin-only via /api/admin)
+
+changePassword(req, res, next):
+  1. Verify currentPassword matches stored hash
+  2. Hash newPassword
+  3. Update in DB
+  Note: Does NOT invalidate existing JWT tokens. For production, add
+  a passwordChangedAt field and validate in protect() middleware.
+
+forgotPassword(req, res, next):
+  1. Generate 32-byte random token with crypto.randomBytes()
+  2. SHA-256 hash the token, store hash in DB (not the raw token)
+  3. Set expiry to 1 hour from now
+  4. Send email with the RAW token as reset link
+  5. Always returns the same generic message (prevents email enumeration)
+
+resetPassword(req, res, next):
+  1. Hash the submitted token (same SHA-256)
+  2. Find user where stored hash matches AND expiry > now
+  3. Hash new password, update user, clear reset token fields
+  WHY HASH THE TOKEN: If DB is leaked, the raw tokens are still safe.
+
+────────────────────────────────────────
+9.2  truckController.js
+────────────────────────────────────────
+
+createTruck:
+  - Sets dealerId = req.user.id automatically
+  - Initial status is AVAILABLE, availability = true
+  - Registration numbers are unique (P2002 Prisma error caught → 409)
+
+getMyTrucks:
+  - Filtered by dealerId = req.user.id
+  - Supports query params: status, page, limit (pagination)
+
+getAllTrucks (ADMIN):
+  - Supports filtering: status, truckType, dealerId
+  - Includes dealer info in response
+
+getAvailableTrucks:
+  - Filters where status=AVAILABLE and availability=true
+  - Supports: minCapacityKg, truckType, routeFrom, routeTo
+  - Used by warehouse when choosing a truck for a shipment
+
+updateTruckLocation:
+  - Verifies the truck belongs to the requesting dealer
+  - Updates currentLocation JSON field with { lat, lng, lastUpdated }
+  - Emits real-time Socket.io event to "truck:{truckId}" room:
+    io.to(`truck:${truck.id}`).emit('truck:location', { truckId, location })
+
+────────────────────────────────────────
+9.3  shipmentController.js
+────────────────────────────────────────
+
+createShipment:
+  - Sets warehouseId = req.user.id
+  - pickupLocation and destination are stored as JSON objects with lat/lng
+  - Initial status = PENDING
+
+getMyShipments / getAllShipments:
+  - Support filtering: status, warehouseId, dateFrom, dateTo, search
+  - Include booking + truck info and ML predictions
+
+getShipment:
+  - Full detail: warehouse info, all bookings with truck + dealer + last tracking
+  - Access control: only owner warehouse or ADMIN can view
+
+cancelShipment:
+  - Cannot cancel if status is DELIVERED, CANCELLED, or IN_TRANSIT
+  - Ownership verified: only the creating warehouse or ADMIN can cancel
+
+runOptimization:
+  1. Calls optimizationService.run(shipment) → finds + scores available trucks
+  2. Takes the top result
+  3. Calls ML service for ETA prediction, fuel estimate, CO2 estimate
+  4. Stores predictions in Prediction table (deletes old ones first)
+  5. Updates shipment status to OPTIMIZED
+  6. Returns full ranked truck list
+
+────────────────────────────────────────
+9.4  bookingController.js
+────────────────────────────────────────
+
+createBooking: (the most complex endpoint)
+  1. Fetch shipment and truck in parallel (Promise.all)
+  2. Validate:
+     - Shipment must belong to requesting warehouse
+     - Truck must be AVAILABLE
+     - Shipment must not already be BOOKED/IN_TRANSIT/DELIVERED/CANCELLED
+  3. Calculate route distance using Haversine formula
+  4. Create estimated ETA: now + durationMin
+  5. Calculate pricing breakdown (pricingService.calculate)
+  6. DB transaction (atomic):
+     - Create booking with status REQUESTED
+     - Update shipment status to BOOKED
+  7. Notify dealer via Socket.io + Notification record
+
+updateBookingStatus: (state machine enforced)
+  Valid transitions:
+    REQUESTED  → APPROVED, REJECTED, CANCELLED
+    APPROVED   → ASSIGNED, CANCELLED
+    ASSIGNED   → PICKED_UP, CANCELLED
+    PICKED_UP  → IN_TRANSIT
+    IN_TRANSIT → DELIVERED
+
+  Role enforcement:
+    APPROVED, REJECTED, ASSIGNED  → only DEALER or ADMIN
+    CANCELLED                     → only WAREHOUSE or ADMIN
+    PICKED_UP, IN_TRANSIT, DELIVERED → only DEALER or ADMIN
+
+  Side effects per status (all in DB transaction):
+    APPROVED   → truck status → BOOKED
+    PICKED_UP/IN_TRANSIT → truck → IN_TRANSIT, shipment → IN_TRANSIT
+    DELIVERED  → truck → AVAILABLE, shipment → DELIVERED, AUTO-CREATE INVOICE
+    CANCELLED/REJECTED → truck → AVAILABLE, shipment → PENDING
+
+  After transaction:
+    - Socket.io events to booking room and warehouse room
+    - Notifications + emails for APPROVED, REJECTED, PICKED_UP, DELIVERED
+
+────────────────────────────────────────
+9.5  trackingController.js
+────────────────────────────────────────
+
+pushLocation:
+  - Creates a TrackingLog record
+  - Emits real-time Socket.io event to:
+      booking:{bookingId} room → for shipment-specific trackers
+      truck:{truckId} room     → for fleet tracking
+
+getTrackingHistory:
+  - Returns ALL TrackingLog records for a booking in chronological order
+
+getLatestLocation:
+  - Returns only the most recent TrackingLog for a booking
+
+────────────────────────────────────────
+9.6  invoiceController.js
+────────────────────────────────────────
+
+Invoices are auto-created on delivery. No manual creation endpoint.
+
+getMyInvoices  → WAREHOUSE sees their own invoices
+getAllInvoices  → ADMIN sees all
+getInvoice     → any authenticated user (access control inside)
+markPaid       → ADMIN sets status=PAID, sets paidAt=now()
+cancelInvoice  → ADMIN sets status=CANCELLED
+
+────────────────────────────────────────
+9.7  notificationController.js
+────────────────────────────────────────
+
+getMyNotifications → returns notifications for req.user.id
+                     supports ?isRead=true/false, page, limit
+markAllRead        → sets isRead=true for all user's notifications
+markRead           → sets isRead=true for one notification
+deleteNotification → hard delete (ownership verified)
+
+────────────────────────────────────────
+9.8  analyticsController.js
+────────────────────────────────────────
+
+getWarehouseAnalytics → for WAREHOUSE:
+  - Total shipments (by status counts)
+  - Total bookings + breakdown
+  - Total amount spent
+  - Recent shipments
+
+getDealerAnalytics → for DEALER:
+  - Total trucks, fleet status breakdown
+  - Total bookings (completed/active)
+  - Total revenue earned
+
+getAdminAnalytics → for ADMIN:
+  - Platform-wide counts: users, shipments, trucks, bookings
+  - Revenue summary
+  - Recent activity across all entities
+
+────────────────────────────────────────
+9.9  adminController.js
+────────────────────────────────────────
+
+All endpoints require ADMIN role (enforced at router level).
+
+getAllUsers  → paginated list of all users
+getUser      → single user with all relations
+updateUserRole → change a user's role (ADMIN | WAREHOUSE | DEALER)
+toggleUserActive → flip isActive flag (soft disable without deleting)
+deleteUser   → hard delete (cascades to related records per DB constraints)
+
+────────────────────────────────────────
+9.10  mlController.js
+────────────────────────────────────────
+
+Acts as a bridge between the REST API and the Python ML microservice.
+All endpoints proxy requests to mlService.js which calls the Python FastAPI.
+Every endpoint has a fallback if the ML service is offline.
+
+getTruckRecommendation:
+  - Reads query params: weight_kg, volume_m3, distance_km, cargo_type, priority
+  - Calls mlService.predictTruckRecommendation()
+  - Returns: recommended_truck type + confidence score
+
+predictDeliveryTime:
+  - Fetches the shipment from DB by shipmentId
+  - Gets distance from shipment's pickupLocation + destination
+  - Calls mlService.predictDeliveryTime() with actual shipment data
+
+predictDelayRisk:
+  - Similar: fetches shipment, calls mlService.predictDelayRisk()
+  - Query params: weather, traffic, time_of_day
+
+clusterShipments:
+  - Fetches pending shipments from DB
+  - Sends them to ML service for grouping by geography/weight
+
+estimateFuel:
+  - Query params: distance_km, weight_kg, truck_type
+  - Returns: liters, cost estimate, CO2
+
+optimizeCargo:
+  - POST body: truck_capacity_kg, truck_capacity_m3, items[]
+  - Returns: which items fit, utilization %, selected items
+
+predictAll (unified):
+  - Single endpoint that dispatches based on prediction_type field
+  - prediction_type: "truck" | "delivery" | "delay" | "fuel" | "cluster" | "cargo"
+
+────────────────────────────────────────
+9.11  uploadController.js
+────────────────────────────────────────
+
+uploadAvatar:
+  - Receives single "avatar" file from multipart form
+  - Deletes old avatar file from disk if one existed
+  - Updates user.avatarUrl in DB
+  - File accessible at: /uploads/avatars/{filename}
+
+deleteAvatar:
+  - Removes file from disk
+  - Clears avatarUrl in DB
+
+uploadProofOfDelivery:
+  - Receives up to 5 "photos" files + 1 "signature" file
+  - Saves paths to booking.proofOfDelivery JSON field
+  - Updates booking status-related data
+
+uploadShipmentDocument:
+  - Attaches a PDF/image to a shipment
+  - Stores in uploads/documents/
+
+================================================================================
+10. SERVICES
+================================================================================
+
+Services contain reusable business logic called by multiple controllers.
+They do NOT have access to req/res — they are pure logic units.
+
+────────────────────────────────────────
+10.1  emailService.js
+────────────────────────────────────────
+
+Uses Nodemailer with SMTP (Gmail, SendGrid SMTP, etc.)
+
+In development (no SMTP configured): logs email to console instead of sending.
+In production: sends real emails.
+
+Functions:
+  sendMail({ to, subject, html, text })  — base sender
+  sendWelcome({ to, name })              — on user registration
+  sendBookingConfirmation(...)           — when booking is APPROVED
+  sendDeliveryConfirmation(...)          — when booking is DELIVERED
+  sendPasswordReset({ to, resetToken })  — forgot password flow
+
+────────────────────────────────────────
+10.2  notificationService.js
+────────────────────────────────────────
+
+Creates in-app notifications (stored in Notification table) AND
+emits real-time Socket.io events to the user's personal room ("user:{userId}").
+
+Functions:
+  bookingRequested(io, { dealerId, bookingId, ... })
+    → notifies DEALER that a new booking was requested
+
+  bookingApproved(io, { warehouseId, bookingId, truckRegNo })
+    → notifies WAREHOUSE their booking was approved
+
+  bookingRejected(io, { warehouseId, bookingId })
+    → notifies WAREHOUSE their booking was rejected
+
+  shipmentPickedUp(io, { warehouseId, bookingId, ... })
+    → notifies WAREHOUSE shipment has been picked up
+
+  shipmentDelivered(io, { warehouseId, dealerId, bookingId, ... })
+    → notifies both parties of delivery
+
+────────────────────────────────────────
+10.3  mlService.js  (THE MOST IMPORTANT SERVICE)
+────────────────────────────────────────
+
+Communicates with the Python FastAPI ML microservice at ML_SERVICE_URL.
+Uses axios with a 10-second timeout. Every method has a heuristic fallback.
+
+ML Microservice Endpoints it calls:
+  POST /predict              → unified dispatcher
+  POST /predict-truck        → truck recommendation
+  POST /predict-delivery-time → delivery ETA
+  POST /predict-delay-risk   → delay risk
+  GET  /estimate-fuel        → fuel estimation
+  POST /cluster-shipments    → shipment clustering
+  POST /optimize-cargo       → cargo optimisation
+  GET  /health               → health check
+  GET  /models/info          → model metadata
+
+HOW FALLBACKS WORK:
+  try {
+    const res = await axios.post(`${ML_API_URL}/predict-truck`, body, { timeout: 10000 });
+    return res.data;     // ML worked → return ML result
+  } catch (err) {
+    logger.warn('ML unavailable — using fallback');
+    return this._truckFallback(data);  // use math-based heuristic
+  }
+
+Fallback heuristics:
+  _truckFallback:    Rules based on weight/volume/cargo type
+  _deliveryFallback: distance_km / 60 km/h average speed
+  _fuelFallback:     distance_km × fuel_rate_per_km (by truck type)
+  _delayFallback:    weather risk % + traffic risk % (lookup tables)
+
+CO2 estimation:
+  estimateCo2(distanceKm, truckType)
+    → Uses hardcoded kg CO2 per km rates (no ML needed, pure math)
+    SMALL_VAN=0.18, CONTAINER_20FT=0.55, CONTAINER_32FT=0.72, REEFER=0.90
+
+────────────────────────────────────────
+10.4  optimizationService.js
+────────────────────────────────────────
+
+Multi-step pipeline to rank available trucks for a shipment.
+
+Step 1: loadCandidates(shipment)
+  → DB query: all trucks where status=AVAILABLE and availability=true
+
+Step 2: filterTrucks(trucks, shipment)
+  Hard filters:
+  - truck.capacityKg >= shipment.weightKg
+  - truck.capacityM3 >= shipment.volumeM3 (if both set)
+  - If truck has routeFrom/routeTo set, shipment cities must match (loose match)
+
+Step 3: scoreTruck(truck, shipment, distanceKm)
+  Scores 4 dimensions (0 to 1 each):
+  
+  utilizationScore     (weight 35%)
+    = (weight_fill + volume_fill) / 2
+    Best truck is the one that uses its capacity most efficiently
+  
+  distanceMatchScore   (weight 25%)
+    = 1 / (1 + distanceKm / 500)
+    Shorter routes score higher (exponential decay)
+  
+  costEfficiencyScore  (weight 25%)
+    = min(50 / pricePerKm, 1.0)
+    Cheaper trucks score higher (baseline ₹50/km)
+  
+  co2Score             (weight 15%)
+    = 1 - co2PerKm / maxCo2
+    Less polluting trucks score higher
+
+  composite = 0.35×util + 0.25×dist + 0.25×cost + 0.15×co2
+
+Step 4: Sort by composite score descending, return top 5
+
+────────────────────────────────────────
+10.5  pricingService.js
+────────────────────────────────────────
+
+Calculates freight cost breakdown for a shipment.
+
+Inputs: distanceKm, weightKg, truckType, dealerPricePerKm
+
+Base rates per km (₹):
+  SMALL_VAN=12, CONTAINER_20FT=28, CONTAINER_32FT=38, FLATBED_TRAILER=42, REEFER=55
+
+Calculation:
+  ratePerKm    = dealer's rate if set, otherwise base rate
+  baseCharge   = max(ratePerKm × distanceKm, ₹500 minimum)
+  weightExtra  = (weightKg - 5000) × ₹0.80/kg (if over 5000 kg)
+  fuelSurcharge = baseCharge × 8%
+  subtotal     = baseCharge + weightExtra + fuelSurcharge
+  gst          = subtotal × 18%
+  total        = subtotal + gst
+
+Returns full breakdown JSON stored in booking.pricing.
+
+────────────────────────────────────────
+10.6  routeService.js
+────────────────────────────────────────
+
+haversineKm(lat1, lng1, lat2, lng2):
+  Calculates straight-line distance between two GPS coordinates using
+  the Haversine formula (accounts for Earth's curvature).
+  Returns distance in kilometers.
+
+calculateRoute(origin, destination):
+  → distanceKm (Haversine)
+  → durationMin = (distanceKm / 60 km/h) × 60
+
+NOTE: This is an approximation. For production, replace with
+Google Maps Distance Matrix API or OSRM for actual road distances.
+
+pickTruckType(weightKg):
+  Simple rule-based initial truck suggestion:
+  ≤1500 kg → SMALL_VAN
+  ≤10000 kg → CONTAINER_20FT
+  ≤25000 kg → CONTAINER_32FT
+  else → FLATBED_TRAILER
+
+────────────────────────────────────────
+10.7  cronService.js
+────────────────────────────────────────
+
+Background jobs running inside the Node process using node-cron.
+
+Job 1: scheduleOverdueInvoices()  [daily at 02:00 AM]
+  → Finds all PENDING invoices whose dueDate < now()
+  → Updates their status to OVERDUE
+
+Job 2: scheduleTokenCleanup()  [every hour]
+  → Finds users with expired passwordResetToken (expiry < now())
+  → Clears the token fields (passwordResetToken = null)
+  → Prevents old tokens from cluttering the DB
+
+Job 3: scheduleNotificationCleanup()  [every Sunday at 03:00 AM]
+  → Deletes read notifications older than 30 days
+  → Keeps the notifications table from growing forever
+
+────────────────────────────────────────
+10.8  shipmentService.js
+────────────────────────────────────────
+
+Provides helper functions for querying shipments by various criteria.
+Used by consolidationService and mlController for batch operations.
+
+────────────────────────────────────────
+10.9  consolidationService.js
+────────────────────────────────────────
+
+Handles shipment consolidation logic.
+Finds shipments that can be grouped (same route, nearby dates)
+to be shipped together in one truck for cost savings.
+Exposed via GET /api/shipments/consolidate
+
+────────────────────────────────────────
+10.10  loadingService.js
+────────────────────────────────────────
+
+3D bin-packing / loading optimization.
+Given a truck's physical dimensions (length × width × height)
+and a list of shipment IDs, calculates optimal loading arrangement.
+Exposed via POST /api/trucks/optimize-loading
+
+================================================================================
+11. VALIDATORS
+================================================================================
+
+All use express-validator. Rules run before controllers.
+The validate middleware checks results and returns 422 if any fail.
+
+authValidators.js:
+  registerRules:
+    - email: valid email format, normalized
+    - password: min 8 characters
+    - name: not empty
+    - role: optional, must be ADMIN|WAREHOUSE|DEALER
+    - phone: optional, valid mobile format
+  loginRules:
+    - email: valid format
+    - password: not empty
+
+truckValidators.js:
+  createTruckRules:
+    - registrationNo: not empty
+    - truckType: must be one of 5 valid types
+    - capacityKg: positive float
+    - capacityM3: optional positive float
+    - routeFrom, routeTo: not empty strings
+    - pricePerKm: optional positive float
+  locationRules:
+    - id param: valid UUID
+    - lat: float -90 to 90
+    - lng: float -180 to 180
+
+shipmentValidators.js:
+  createShipmentRules:
+    - weightKg: positive float (required)
+    - volumeM3: optional positive float
+    - boxes: optional positive int
+    - pickupLocation: required object with lat, lng, address
+    - destination: required object with lat, lng, address
+    - deadline: optional ISO8601 date
+
+bookingValidators.js:
+  createBookingRules:
+    - shipmentId: valid UUID
+    - truckId: valid UUID
+    - notes: optional, max 500 chars
+    - optimScore: optional float 0-1
+  updateStatusRules:
+    - id param: valid UUID
+    - status: must be one of the 7 valid BookingStatus values
+    - notes: optional, max 500 chars
+
+trackingValidators.js:
+  pushLocationRules:
+    - bookingId: valid UUID
+    - latitude: float -90 to 90
+    - longitude: float -180 to 180
+    - status: optional string max 100 chars
+
+================================================================================
+12. REAL-TIME (SOCKET.IO)
+================================================================================
+
+Socket.io runs on the same HTTP server as Express.
+CORS allows connections from FRONTEND_URL.
+
+Room naming convention:
+  "user:{userId}"       → personal notifications for a specific user
+  "booking:{bookingId}" → booking status changes, live tracking
+  "warehouse:{userId}"  → all events for a warehouse operator
+  "dealer:{userId}"     → all events for a dealer
+  "truck:{truckId}"     → live GPS location updates for a specific truck
+
+Client joins rooms by emitting:
+  socket.emit('join', 'booking:12345-abcd-...')
+
+Events emitted by backend:
+  'booking:statusUpdate'  → when booking status changes
+  'truck:location'        → when dealer updates truck GPS
+  'notification'          → new notification for a user
+
+The io instance is shared with controllers via:
+  app.set('io', io)
+And retrieved in controllers:
+  const io = req.app.get('io');
+
+================================================================================
+13. REQUEST / RESPONSE FLOW (end-to-end example)
+================================================================================
+
+Example: POST /api/bookings  (Warehouse creates a booking)
+
+1. Request arrives at Express server
+2. requestId middleware → attaches UUID "req-abc123"
+3. morgan middleware → logs "POST /api/bookings 200 45ms"
+4. apiLimiter middleware → checks rate limit for client IP
+5. Express routes to bookingRoutes.js
+6. protect middleware → verifies JWT, sets req.user = { id, email, role: 'WAREHOUSE' }
+7. restrictTo('WAREHOUSE', 'ADMIN') → req.user.role is WAREHOUSE, allowed
+8. createBookingRules middleware → validates body (shipmentId UUID, truckId UUID)
+9. validate middleware → no errors, calls next()
+10. createBooking controller starts:
+    a. Fetches shipment and truck from DB in parallel
+    b. Validates ownership and availability
+    c. Calculates route distance (haversineKm)
+    d. Calculates pricing (pricingService.calculate)
+    e. Opens Prisma transaction:
+       - Creates Booking record
+       - Updates Shipment.status → BOOKED
+    f. Gets Socket.io from app.set
+    g. Creates Notification record for dealer
+    h. Emits 'notification' socket event to "user:{dealerId}" room
+11. Returns 201 JSON: { success: true, booking: { id, status, pricing, ... } }
+12. If any error: next(err) → errorHandler → 500 JSON with requestId
+
+================================================================================
+14. AUTH & ROLE-BASED ACCESS CONTROL
+================================================================================
+
+Authentication: JWT (stateless)
+  - Token signed with JWT_SECRET, expires in JWT_EXPIRES_IN (default 7 days)
+  - Token payload: { id, email, role }
+  - Sent in Authorization header: "Bearer <token>"
+  - No session storage — all state is in the token
+
+Role Hierarchy:
+  ADMIN     → can do everything (bypass most ownership checks)
+  WAREHOUSE → manage own shipments and bookings
+  DEALER    → manage own trucks and accept/update bookings
+
+Ownership checks (example from bookingController):
+  const isOwner = booking.warehouseId === req.user.id;
+  const isAdmin = req.user.role === 'ADMIN';
+  if (!isOwner && !isAdmin) return 403;
+
+This pattern repeats across all controllers for data isolation.
+
+================================================================================
+15. BOOKING LIFECYCLE STATE MACHINE
+================================================================================
+
+States and valid transitions:
+
+  REQUESTED ──→ APPROVED (by DEALER)
+             ──→ REJECTED (by DEALER)
+             ──→ CANCELLED (by WAREHOUSE)
+
+  APPROVED ──→ ASSIGNED (by DEALER)
+           ──→ CANCELLED (by WAREHOUSE)
+
+  ASSIGNED ──→ PICKED_UP (by DEALER, truck physically loads shipment)
+           ──→ CANCELLED
+
+  PICKED_UP ──→ IN_TRANSIT (by DEALER, truck departs)
+
+  IN_TRANSIT ──→ DELIVERED (by DEALER, delivery confirmed)
+
+  DELIVERED → FINAL STATE (auto-creates invoice)
+  REJECTED  → FINAL STATE
+  CANCELLED → FINAL STATE (truck + shipment reset to AVAILABLE/PENDING)
+
+Side effects at each transition (done in DB transaction):
+  APPROVED   → Truck.status = BOOKED
+  PICKED_UP  → Truck.status = IN_TRANSIT, Shipment.status = IN_TRANSIT
+  IN_TRANSIT → Same as PICKED_UP
+  DELIVERED  → Truck.status = AVAILABLE, Shipment.status = DELIVERED
+               + Invoice auto-created with 7-day due date
+  CANCELLED  → Truck.status = AVAILABLE, Shipment.status = PENDING
+
+================================================================================
+16. ML SERVICE INTEGRATION & FALLBACKS
+================================================================================
+
+Architecture:
+  Client → Node.js Backend → Python FastAPI ML Service (localhost:8000)
+                           ↘ Heuristic fallback (if ML offline)
+
+The ML service has 6 prediction models:
+  1. Truck Recommendation     → which truck type to use
+  2. Delivery Time Prediction → ETA in hours
+  3. Delay Risk Assessment    → probability of delay
+  4. Fuel Estimation          → liters + cost + CO2
+  5. Shipment Clustering      → group shipments for batch routing
+  6. Cargo Optimization       → bin-packing for maximum utilization
+
+Fallback behavior:
+  Every ML call is wrapped in try/catch.
+  If the Python service is:
+    - Down (connection refused)
+    - Slow (> 10 second timeout)
+    - Returning errors
+  → the backend automatically uses mathematical heuristics
+  → all fallback responses include { "fallback": true } field
+  → the API still returns 200 OK (never fails because of ML)
+
+This means the entire backend works even without the ML service running.
+
+================================================================================
+17. BACKGROUND JOBS (CRON)
+================================================================================
+
+Three scheduled jobs run inside the Node process:
+
+1. Daily 02:00 AM — Mark Overdue Invoices
+   Finds all PENDING invoices past their dueDate, sets them OVERDUE.
+
+2. Hourly — Clean Expired Password Reset Tokens
+   Finds users with expired reset tokens, clears them from DB.
+   Prevents unnecessary data accumulation.
+
+3. Weekly Sunday 03:00 AM — Delete Old Notifications
+   Hard-deletes read notifications older than 30 days.
+   Keeps the notifications table lean.
+
+For high-scale production:
+  Move these to a separate worker process, Bull queue + Redis, or AWS Lambda.
+
+================================================================================
+18. ERROR HANDLING STRATEGY
+================================================================================
+
+Level 1: Validator errors (422 Unprocessable Entity)
+  express-validator catches malformed request data before hitting controllers.
+
+Level 2: Business logic errors (4xx)
+  Controllers explicitly return specific status codes:
+  - 400 Bad Request     → invalid state transitions, logical errors
+  - 401 Unauthorized    → missing/invalid JWT
+  - 403 Forbidden       → valid auth but insufficient permissions
+  - 404 Not Found       → record doesn't exist
+  - 409 Conflict        → duplicate unique field
+
+Level 3: Prisma errors (automatically mapped in errorHandler)
+  P2002 → 409  (unique constraint violated)
+  P2025 → 404  (record not found)
+  P2003 → 400  (foreign key constraint failed)
+
+Level 4: Unexpected errors (500)
+  Any unhandled error propagated via next(err).
+  In production: returns generic "Internal server error" message.
+  In development: returns full error + stack trace.
+
+Level 5: Process-level errors
+  uncaughtException and unhandledRejection → logged → process.exit(1)
+  These crash the process intentionally (let process manager like PM2 restart it).
+
+================================================================================
+19. FILE UPLOAD SYSTEM
+================================================================================
+
+Storage: Local disk (backend/uploads/)
+Engine: Multer
+
+File security:
+  - MIME type check (must be jpeg/jpg/png/webp/pdf)
+  - File extension check (double validation)
+  - Max size: 5MB per file
+
+Serving uploaded files:
+  app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')))
+  So uploaded files are accessible at: http://localhost:5000/uploads/{subfolder}/{filename}
+
+Three upload contexts:
+  avatars/           → user profile photos (single file)
+  proof-of-delivery/ → delivery evidence (up to 5 photos + 1 signature)
+  documents/         → shipment PDFs/images (single file)
+
+File naming: {timestamp}-{random}.{ext}
+  Prevents collisions and obfuscates original filenames.
+
+================================================================================
+20. API QUICK REFERENCE
+================================================================================
+
+BASE URL: http://localhost:5000
+
+AUTH HEADER: Authorization: Bearer {token}
+
+── HEALTH (no auth) ──
+GET    /health                           → backend health check
+GET    /api/ml/health                    → ML service health
+GET    /api/ml/models/info               → ML model info
+
+── AUTH ──
+POST   /api/auth/register               → { name, email, password, role? }
+POST   /api/auth/login                  → { email, password }
+POST   /api/auth/forgot-password        → { email }
+POST   /api/auth/reset-password         → { token, newPassword }
+GET    /api/auth/me                     → get my profile [AUTH]
+PATCH  /api/auth/me                     → { name?, phone?, company? } [AUTH]
+PATCH  /api/auth/me/password            → { currentPassword, newPassword } [AUTH]
+
+── TRUCKS ──
+POST   /api/trucks                      → { registrationNo, truckType, capacityKg, routeFrom, routeTo } [DEALER/ADMIN]
+GET    /api/trucks/my                   → paginated list [DEALER]
+GET    /api/trucks/available            → ?minCapacityKg=&truckType=&routeFrom=&routeTo= [AUTH]
+GET    /api/trucks                      → all trucks [ADMIN]
+GET    /api/trucks/:id                  → single truck [AUTH]
+PATCH  /api/trucks/:id                  → update fields [AUTH]
+PATCH  /api/trucks/:id/location         → { lat, lng } [DEALER/ADMIN]
+DELETE /api/trucks/:id                  → [ADMIN]
+POST   /api/trucks/optimize-loading     → { truck: {length,width,height}, shipmentIds: [] } [AUTH]
+
+── SHIPMENTS ──
+POST   /api/shipments                   → { weightKg, pickupLocation:{lat,lng,address}, destination, ... } [WH/ADMIN]
+GET    /api/shipments/my                → ?status=&page=&limit= [WAREHOUSE]
+GET    /api/shipments                   → all [ADMIN]
+GET    /api/shipments/:id               → [AUTH]
+PATCH  /api/shipments/:id/cancel        → [AUTH]
+POST   /api/shipments/:id/optimize      → runs optimization engine [WH/ADMIN]
+GET    /api/shipments/consolidate       → ?from=&to= [AUTH]
+
+── BOOKINGS ──
+POST   /api/bookings                    → { shipmentId, truckId, notes? } [WH/ADMIN]
+GET    /api/bookings/my                 → warehouse's bookings [WH]
+GET    /api/bookings/dealer             → dealer's bookings [DEALER]
+GET    /api/bookings                    → all [ADMIN]
+GET    /api/bookings/:id                → [AUTH - involved parties]
+PATCH  /api/bookings/:id/status         → { status, notes? } [role-gated]
+
+── TRACKING ──
+POST   /api/tracking/update             → { bookingId, latitude, longitude, status? } [DEALER/ADMIN]
+GET    /api/tracking/:bookingId         → full history [AUTH]
+GET    /api/tracking/:bookingId/latest  → latest point [AUTH]
+
+── INVOICES ──
+GET    /api/invoices/my                 → [WH/ADMIN]
+GET    /api/invoices                    → all [ADMIN]
+GET    /api/invoices/:id                → [AUTH]
+PATCH  /api/invoices/:id/pay            → [ADMIN]
+PATCH  /api/invoices/:id/cancel         → [ADMIN]
+
+── NOTIFICATIONS ──
+GET    /api/notifications               → [AUTH]
+PATCH  /api/notifications/read-all      → [AUTH]
+PATCH  /api/notifications/:id/read      → [AUTH]
+DELETE /api/notifications/:id           → [AUTH]
+
+── ANALYTICS ──
+GET    /api/analytics/warehouse         → [WH/ADMIN]
+GET    /api/analytics/dealer            → [DEALER/ADMIN]
+GET    /api/analytics/admin             → [ADMIN]
+
+── ADMIN ──
+GET    /api/admin/users                 → [ADMIN]
+GET    /api/admin/users/:id             → [ADMIN]
+PATCH  /api/admin/users/:id/role        → { role } [ADMIN]
+PATCH  /api/admin/users/:id/toggle      → [ADMIN]
+DELETE /api/admin/users/:id             → [ADMIN]
+
+── UPLOADS (multipart/form-data) ──
+POST   /api/uploads/avatar              → file: avatar [AUTH]
+DELETE /api/uploads/avatar              → [AUTH]
+POST   /api/uploads/proof/:bookingId    → files: photos[], signature [DEALER/ADMIN]
+GET    /api/uploads/proof/:bookingId    → [AUTH]
+POST   /api/uploads/document/:shipmentId → file: document [WH/ADMIN]
+
+── ML PREDICTIONS ──
+GET    /api/ml/recommend-truck          → ?weight_kg=&volume_m3=&distance_km=&cargo_type=&priority= [AUTH]
+GET    /api/ml/predict-delivery/:shipmentId → ?traffic=&weather= [AUTH]
+GET    /api/ml/predict-delay/:shipmentId    → ?weather=&traffic=&time_of_day= [AUTH]
+GET    /api/ml/estimate-fuel            → ?distance_km=&weight_kg=&truck_type= [AUTH]
+GET    /api/ml/cluster-shipments        → ?status=PENDING [AUTH]
+POST   /api/ml/optimize-cargo           → { truck_capacity_kg, truck_capacity_m3, items:[{name,weight_kg,volume_m3}] } [AUTH]
+POST   /api/ml/predict                  → { prediction_type, ...fields } [AUTH]
+
+================================================================================
+  END OF DOCUMENTATION
+  Generated for FreightZen Backend v1.0
+  Node.js + Express + Prisma + PostgreSQL + Socket.io + ML Integration
+================================================================================
