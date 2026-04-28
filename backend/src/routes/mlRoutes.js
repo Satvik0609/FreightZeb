@@ -49,10 +49,11 @@ router.post('/predict', predictionTypeParam, validate, predictAll);
 // GET  /api/ml/recommend-truck?weight_kg=&volume_m3=&distance_km=&cargo_type=&priority=
 router.get('/recommend-truck', recommendTruckRules, validate, getTruckRecommendation);
 
-// GET  /api/ml/predict-delivery/:shipmentId?traffic=&weather=
+// GET  /api/ml/predict-delivery/:shipmentId?traffic=&weather=&truck_type=
 router.get('/predict-delivery/:shipmentId', deliveryPredictionQueryRules, validate, predictDeliveryTime);
 
 // GET  /api/ml/cluster-shipments?status=PENDING
+// DEALER access is intentionally denied in the controller.
 router.get('/cluster-shipments', clusterShipmentsRules, validate, clusterShipments);
 
 // GET  /api/ml/predict-delay/:shipmentId?weather=&traffic=&time_of_day=

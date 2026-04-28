@@ -38,6 +38,7 @@ const deliveryPredictionQueryRules = [
   ...shipmentIdParamRules,
   query('weather').optional().isIn(weatherConditions),
   query('traffic').optional().isIn(trafficConditions),
+  query('truck_type').optional().isIn(truckTypes),
 ];
 
 const clusterShipmentsRules = [

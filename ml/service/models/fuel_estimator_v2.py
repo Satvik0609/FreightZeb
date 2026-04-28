@@ -53,7 +53,7 @@ class FuelEstimatorV2:
             min_samples_split=5,
             min_samples_leaf=2,
             random_state=42,
-            n_jobs=-1
+            n_jobs=1
         )
         
         self.is_trained = False
@@ -238,6 +238,7 @@ class FuelEstimatorV2:
             
             self.xgb_model = model_data['xgb_model']
             self.rf_model = model_data['rf_model']
+            self.rf_model.n_jobs = 1
             self.scaler = model_data['scaler']
             self.truck_encoder = model_data['truck_encoder']
             self.r2_score = model_data['r2_score']

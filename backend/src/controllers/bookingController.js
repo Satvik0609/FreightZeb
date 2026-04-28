@@ -9,13 +9,14 @@ const notificationService = require('../services/notificationService');
 const emailService = require('../services/emailService');
 const { asyncHandler } = require('../helpers/errors');
 const { parsePagination, paginatedResponse } = require('../helpers/pagination');
+const { emitShipmentStatusUpdate } = require('../helpers/realtime');
 const logger = require('../config/logger');
 
 // ── POST /api/bookings ───────────────────────────────────────────────────────
 const createBooking = asyncHandler(async (req, res) => {
     const { shipmentId, truckId, notes, optimScore } = req.body;
 
-    const booking = await bookingService.create({
+    const { booking, shipmentStatusChange } = await bookingService.create({
         shipmentId,
         truckId,
         warehouseId: req.user.id,
@@ -29,6 +30,7 @@ const createBooking = asyncHandler(async (req, res) => {
     notificationService
         .bookingRequested(io, { dealerId: booking.dealerId, bookingId: booking.id, shipmentId, warehouseName })
         .catch((e) => logger.warn(`Notification failed: ${e.message}`));
+    emitShipmentStatusUpdate(io, shipmentStatusChange);
 
     res.status(201).json({ success: true, booking });
 });
@@ -67,7 +69,7 @@ const getBooking = asyncHandler(async (req, res) => {
 const updateBookingStatus = asyncHandler(async (req, res) => {
     const { status, notes } = req.body;
 
-    const updated = await bookingService.transitionStatus({
+    const { booking: updated, shipmentStatusChange } = await bookingService.transitionStatus({
         bookingId: req.params.id,
         newStatus: status,
         notes,
@@ -78,6 +80,7 @@ const updateBookingStatus = asyncHandler(async (req, res) => {
     // Real-time update
     const io = req.app.get('io');
     io.to(`booking:${updated.id}`).emit('booking:statusUpdate', { bookingId: updated.id, status });
+    emitShipmentStatusUpdate(io, shipmentStatusChange);
 
     // Fire-and-forget side effects
     _fireStatusSideEffects(io, updated, status).catch((e) =>

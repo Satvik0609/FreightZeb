@@ -74,7 +74,17 @@ async function create({ shipmentId, truckId, warehouseId, notes, optimScore }) {
   });
 
   logger.info(`Booking created: ${booking.id}`);
-  return booking;
+  return {
+    booking,
+    shipmentStatusChange: {
+      shipmentId,
+      warehouseId,
+      bookingId: booking.id,
+      previousStatus: 'PENDING',
+      status: 'BOOKED',
+      source: 'booking:create',
+    },
+  };
 }
 
 /**
@@ -103,6 +113,7 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
   if (newStatus === 'PICKED_UP')  data.pickedUpAt  = new Date();
   if (newStatus === 'DELIVERED')  data.deliveredAt = new Date();
 
+  let shipmentStatusChange = null;
   const updated = await prisma.$transaction(async (tx) => {
     const b = await tx.booking.update({ where: { id: bookingId }, data });
 
@@ -125,6 +136,14 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
     }
 
     if (['PICKED_UP', 'IN_TRANSIT'].includes(newStatus)) {
+      shipmentStatusChange = {
+        shipmentId: booking.shipmentId,
+        warehouseId: booking.warehouseId,
+        bookingId,
+        previousStatus: booking.shipment.status,
+        status: 'IN_TRANSIT',
+        source: `booking:${newStatus.toLowerCase()}`,
+      };
       await Promise.all([
         tx.truck.update({ where: { id: booking.truckId }, data: { status: 'IN_TRANSIT', availability: false } }),
         tx.shipment.update({ where: { id: booking.shipmentId }, data: { status: 'IN_TRANSIT' } }),
@@ -133,6 +152,14 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
 
     if (newStatus === 'DELIVERED') {
       const invoiceNo = `INV-${Date.now()}`;
+      shipmentStatusChange = {
+        shipmentId: booking.shipmentId,
+        warehouseId: booking.warehouseId,
+        bookingId,
+        previousStatus: booking.shipment.status,
+        status: 'DELIVERED',
+        source: 'booking:delivered',
+      };
       await Promise.all([
         tx.truck.update({ where: { id: booking.truckId }, data: { status: 'AVAILABLE', availability: true } }),
         tx.shipment.update({ where: { id: booking.shipmentId }, data: { status: 'DELIVERED' } }),
@@ -180,6 +207,15 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
         ? ['PICKED_UP', 'IN_TRANSIT'].includes(otherShipmentBooking.status) ? 'IN_TRANSIT' : 'BOOKED'
         : 'PENDING';
 
+      shipmentStatusChange = {
+        shipmentId: booking.shipmentId,
+        warehouseId: booking.warehouseId,
+        bookingId,
+        previousStatus: booking.shipment.status,
+        status: nextShipmentStatus,
+        source: `booking:${newStatus.toLowerCase()}`,
+      };
+
       await tx.shipment.update({
         where: { id: booking.shipmentId },
         data: { status: nextShipmentStatus },
@@ -190,7 +226,7 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
   });
 
   logger.info(`Booking ${bookingId}: ${booking.status} → ${newStatus} by user ${userId}`);
-  return updated;
+  return { booking: updated, shipmentStatusChange };
 }
 
 /**

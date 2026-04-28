@@ -6,9 +6,10 @@
 const mlService = require('../services/mlService');
 const { prisma } = require('../config/db');
 const { asyncHandler, AppError } = require('../helpers/errors');
+const { emitShipmentPredictionsUpdated } = require('../helpers/realtime');
 const logger = require('../config/logger');
 
-// ── Health / info ─────────────────────────────────────────────────────────────
+// Health / info
 const getMlHealth = asyncHandler(async (req, res) => {
   try {
     const [health, readyz] = await Promise.allSettled([
@@ -35,7 +36,7 @@ const getModelsInfo = asyncHandler(async (req, res) => {
   res.json({ success: true, ...info });
 });
 
-// ── Unified predict ───────────────────────────────────────────────────────────
+// Unified predict
 const predictAll = asyncHandler(async (req, res) => {
   const { prediction_type, ...payload } = req.body;
   const VALID = ['truck', 'delivery', 'delay', 'fuel', 'cluster', 'cargo'];
@@ -47,11 +48,23 @@ const predictAll = asyncHandler(async (req, res) => {
     throw AppError.unprocessable(`Unknown prediction_type. Valid: ${VALID.join(', ')}`);
   }
 
-  const result = await mlService.predictAll(pt, payload, req.requestId);
-  res.json({ success: true, prediction_type: pt, result });
+  try {
+    const result = await mlService.predictAll(pt, payload, req.requestId);
+    res.json({ success: true, prediction_type: pt, result });
+  } catch (err) {
+    if (pt === 'cargo') {
+      logger.warn(`Unified cargo prediction failed: ${err.message}`);
+      return res.status(503).json({
+        success: false,
+        code: 'ML_UNAVAILABLE',
+        message: 'Cargo optimization requires the ML service to be available.',
+      });
+    }
+    throw err;
+  }
 });
 
-// ── Truck recommendation ──────────────────────────────────────────────────────
+// Truck recommendation
 const getTruckRecommendation = asyncHandler(async (req, res) => {
   const { weight_kg, volume_m3, distance_km, cargo_type, priority } = req.query;
   const result = await mlService.predictTruckRecommendation(
@@ -61,21 +74,22 @@ const getTruckRecommendation = asyncHandler(async (req, res) => {
   res.json({ success: true, result });
 });
 
-// ── Delivery time for a DB shipment ──────────────────────────────────────────
+// Delivery time for a DB shipment
 const predictDeliveryTime = asyncHandler(async (req, res) => {
   const shipment = await _getShipmentOrThrow(req.params.shipmentId, req.user);
   const booking = shipment.bookings?.[0];
-  if (!booking) throw AppError.badRequest('Shipment has no booking yet — create a booking first');
+  const distanceKm = booking?.distanceKm || _inferDistanceKm(shipment);
+  const truckType = booking?.truck?.truckType || req.query.truck_type || 'CONTAINER_20FT';
 
   const result = await mlService.predictDeliveryTime({
     weight_kg: shipment.weightKg,
-    distance_km: booking.distanceKm || 0,
-    truck_type: booking.truck?.truckType || 'CONTAINER_20FT',
+    distance_km: distanceKm,
+    truck_type: truckType,
     traffic_condition: req.query.traffic || 'MODERATE',
     weather_condition: req.query.weather || 'CLEAR',
   }, req.requestId);
 
-  await prisma.$transaction([
+  const [, savedPrediction] = await prisma.$transaction([
     prisma.prediction.deleteMany({ where: { shipmentId: shipment.id, type: 'ETA_HOURS' } }),
     prisma.prediction.create({
       data: {
@@ -88,10 +102,18 @@ const predictDeliveryTime = asyncHandler(async (req, res) => {
     }),
   ]);
 
+  emitShipmentPredictionsUpdated(req.app.get('io'), {
+    shipmentId: shipment.id,
+    warehouseId: shipment.warehouseId,
+    predictions: [savedPrediction],
+    source: 'ml:predict-delivery',
+    trigger: 'delivery_prediction',
+  });
+
   res.json({ success: true, result });
 });
 
-// ── Cluster shipments ─────────────────────────────────────────────────────────
+// Cluster shipments
 const clusterShipments = asyncHandler(async (req, res) => {
   if (req.user.role === 'DEALER') throw AppError.forbidden();
 
@@ -125,7 +147,7 @@ const clusterShipments = asyncHandler(async (req, res) => {
   res.json({ success: true, result });
 });
 
-// ── Delay risk for a DB shipment ──────────────────────────────────────────────
+// Delay risk for a DB shipment
 const predictDelayRisk = asyncHandler(async (req, res) => {
   const shipment = await _getShipmentOrThrow(req.params.shipmentId, req.user);
   const booking = shipment.bookings?.[0];
@@ -156,7 +178,7 @@ const predictDelayRisk = asyncHandler(async (req, res) => {
   res.json({ success: true, result });
 });
 
-// ── Fuel estimate ─────────────────────────────────────────────────────────────
+// Fuel estimate
 const estimateFuel = asyncHandler(async (req, res) => {
   const { distance_km, weight_kg, truck_type } = req.query;
   const result = await mlService.estimateFuel(
@@ -166,7 +188,7 @@ const estimateFuel = asyncHandler(async (req, res) => {
   res.json({ success: true, result });
 });
 
-// ── Cargo optimization ────────────────────────────────────────────────────────
+// Cargo optimization
 const optimizeCargo = asyncHandler(async (req, res) => {
   const { truck_capacity_kg, truck_capacity_m3, items } = req.body;
   try {
@@ -182,7 +204,7 @@ const optimizeCargo = asyncHandler(async (req, res) => {
   }
 });
 
-// ── Shared helper ─────────────────────────────────────────────────────────────
+// Shared helper
 async function _getShipmentOrThrow(shipmentId, user) {
   const shipment = await prisma.shipment.findUnique({
     where: { id: shipmentId },
@@ -204,6 +226,27 @@ async function _getShipmentOrThrow(shipmentId, user) {
 
   if (!allowed) throw AppError.forbidden();
   return shipment;
+}
+
+function _inferDistanceKm(shipment) {
+  const origin = shipment.pickupLocation || {};
+  const destination = shipment.destination || {};
+  const lat1 = Number(origin.lat);
+  const lon1 = Number(origin.lng);
+  const lat2 = Number(destination.lat);
+  const lon2 = Number(destination.lng);
+
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return 0;
+
+  const toRad = (value) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+
+  return parseFloat((earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(2));
 }
 
 module.exports = {

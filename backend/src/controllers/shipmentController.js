@@ -3,6 +3,11 @@ const optimizationService = require('../services/optimizationService');
 const mlService = require('../services/mlService');
 const logger = require('../config/logger');
 const { parsePagination } = require('../helpers/pagination');
+const {
+  emitShipmentStatusUpdate,
+  emitShipmentPredictionsUpdated,
+  emitShipmentOptimized,
+} = require('../helpers/realtime');
 
 function inferCargoType(requirements) {
   if (requirements?.tempControlled) return 'REFRIGERATED';
@@ -153,6 +158,7 @@ async function getShipment(req, res, next) {
 async function cancelShipment(req, res, next) {
   try {
     const NON_TERMINAL = ['REQUESTED', 'APPROVED', 'ASSIGNED'];
+    const io = req.app.get('io');
 
     const updated = await prisma.$transaction(async (tx) => {
       const shipment = await tx.shipment.findUnique({
@@ -207,6 +213,12 @@ async function cancelShipment(req, res, next) {
     });
 
     logger.info(`Shipment ${updated.id} cancelled by ${req.user.id}`);
+    emitShipmentStatusUpdate(io, {
+      shipmentId: updated.id,
+      warehouseId: updated.warehouseId,
+      status: updated.status,
+      source: 'shipment:cancel',
+    });
     res.json({ success: true, shipment: updated });
   } catch (err) {
     next(err);
@@ -216,6 +228,7 @@ async function cancelShipment(req, res, next) {
 // ── Run optimization + save predictions ─────────────────────────────────────
 async function runOptimization(req, res, next) {
   try {
+    const io = req.app.get('io');
     const shipment = await prisma.shipment.findUnique({ where: { id: req.params.id } });
     if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found' });
 
@@ -227,7 +240,7 @@ async function runOptimization(req, res, next) {
     }
 
     const results = await optimizationService.run(shipment);
-
+    let predictions = [];
     // Use the ML truck recommendation to promote the best-fitting candidate before
     // persisting ETA/fuel predictions derived from that recommendation.
     if (results.results.length > 0) {
@@ -274,7 +287,7 @@ async function runOptimization(req, res, next) {
       const fuelLiters = fuelResult?.estimated_liters ?? null;
       const co2Kg = mlService.estimateCo2(distanceKm, top.truckType);
 
-      const predictions = [];
+      predictions = [];
       if (etaHours !== null) {
         predictions.push({
           shipmentId: shipment.id,
@@ -316,9 +329,32 @@ async function runOptimization(req, res, next) {
       }
     }
 
-    await prisma.shipment.update({ where: { id: req.params.id }, data: { status: 'OPTIMIZED' } });
+    const updatedShipment = await prisma.shipment.update({
+      where: { id: req.params.id },
+      data: { status: 'OPTIMIZED' },
+    });
 
     logger.info(`Optimization complete for shipment ${shipment.id}`);
+    emitShipmentPredictionsUpdated(io, {
+      shipmentId: shipment.id,
+      warehouseId: shipment.warehouseId,
+      predictions,
+      source: 'shipment:optimize',
+      trigger: 'optimization',
+    });
+    emitShipmentOptimized(io, {
+      shipmentId: shipment.id,
+      warehouseId: shipment.warehouseId,
+      predictions,
+      results: results.results,
+    });
+    emitShipmentStatusUpdate(io, {
+      shipmentId: updatedShipment.id,
+      warehouseId: updatedShipment.warehouseId,
+      previousStatus: shipment.status,
+      status: updatedShipment.status,
+      source: 'shipment:optimize',
+    });
     res.json({
       success: true,
       shipmentId: shipment.id,
