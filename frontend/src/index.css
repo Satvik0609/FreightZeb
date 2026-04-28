@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+  }
+
+  button {
+    @apply transition-all duration-200 ease-in-out active:scale-95;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-soft transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-panel dark:border-slate-800 dark:bg-slate-900;
+  }
+
+  .panel-muted {
+    @apply rounded-2xl border border-slate-200/70 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-900/60;
+  }
+
+  .input-base {
+    @apply h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none ring-0 transition-all duration-200 ease-in-out placeholder:text-slate-400 focus:border-blue-500 focus:shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100;
+  }
+
+  .skeleton {
+    @apply animate-shimmer rounded-2xl bg-[linear-gradient(90deg,rgba(226,232,240,0.45)_25%,rgba(241,245,249,0.85)_37%,rgba(226,232,240,0.45)_63%)] bg-[length:200%_100%] dark:bg-[linear-gradient(90deg,rgba(30,41,59,0.55)_25%,rgba(51,65,85,0.9)_37%,rgba(30,41,59,0.55)_63%)];
+  }
+
+  .text-subtle {
+    @apply text-sm text-slate-500 dark:text-slate-400;
+  }
+}
+
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  border-radius: 1rem;
+}
