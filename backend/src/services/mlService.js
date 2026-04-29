@@ -33,6 +33,29 @@ const CIRCUIT = {
   halfOpenMs: 30_000,
 };
 
+const TELEMETRY = {
+  startedAt: Date.now(),
+  requests: 0,
+  successes: 0,
+  fallbacks: 0,
+  byType: {
+    truck: { requests: 0, fallbacks: 0 },
+    delivery: { requests: 0, fallbacks: 0 },
+    delay: { requests: 0, fallbacks: 0 },
+    fuel: { requests: 0, fallbacks: 0 },
+    cluster: { requests: 0, fallbacks: 0 },
+    cargo: { requests: 0, fallbacks: 0 },
+  },
+  lastFallbackAt: null,
+  lastFallbackReason: null,
+  retrain: {
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+    lastStatus: 'never',
+    lastResultSummary: null,
+  },
+};
+
 function isCircuitOpen() {
   if (!CIRCUIT.openedAt) return false;
   if (Date.now() - CIRCUIT.openedAt > CIRCUIT.halfOpenMs) {
@@ -145,9 +168,27 @@ function _clusterFallback(shipments) {
 }
 
 class MLService {
+  _markRequest(type) {
+    TELEMETRY.requests += 1;
+    if (type && TELEMETRY.byType[type]) TELEMETRY.byType[type].requests += 1;
+  }
+
+  _markSuccess() {
+    TELEMETRY.successes += 1;
+  }
+
+  _markFallback(type, reason) {
+    TELEMETRY.fallbacks += 1;
+    TELEMETRY.lastFallbackAt = Date.now();
+    TELEMETRY.lastFallbackReason = reason || 'unknown';
+    if (type && TELEMETRY.byType[type]) TELEMETRY.byType[type].fallbacks += 1;
+  }
+
   async predictAll(predictionType, payload, requestId) {
+    this._markRequest(predictionType);
     try {
       const data = await _post('/predict', { prediction_type: predictionType, ...payload }, requestId);
+      this._markSuccess();
       return { ...data, fallback: false, source: 'ml_service' };
     } catch (err) {
       if (!shouldUseFallback(err)) throw err;
@@ -157,6 +198,7 @@ class MLService {
         throw new Error('Cargo optimization requires the ML service to be available.');
       }
 
+      this._markFallback(predictionType, err.message);
       return this._fallbackByType(predictionType, payload);
     }
   }
@@ -174,62 +216,79 @@ class MLService {
   }
 
   async predictTruckRecommendation(data, requestId) {
+    this._markRequest('truck');
     try {
       const res = await _post('/predict-truck', data, requestId);
+      this._markSuccess();
       return { ...res, fallback: false };
     } catch (err) {
       if (!shouldUseFallback(err)) throw err;
       logger.warn(`ML truck recommendation failed: ${err.message}`);
+      this._markFallback('truck', err.message);
       return _truckFallback(data);
     }
   }
 
   async predictDeliveryTime(data, requestId) {
+    this._markRequest('delivery');
     try {
       const res = await _post('/predict-delivery-time', data, requestId);
+      this._markSuccess();
       return { ...res, fallback: false };
     } catch (err) {
       if (!shouldUseFallback(err)) throw err;
       logger.warn(`ML delivery prediction failed: ${err.message}`);
+      this._markFallback('delivery', err.message);
       return _deliveryFallback(data);
     }
   }
 
   async clusterShipments(shipments, requestId) {
+    this._markRequest('cluster');
     try {
       const res = await _post('/cluster-shipments', { shipments }, requestId, 15_000);
+      this._markSuccess();
       return { ...res, fallback: false };
     } catch (err) {
       if (!shouldUseFallback(err)) throw err;
       logger.warn(`ML clustering failed: ${err.message}`);
+      this._markFallback('cluster', err.message);
       return _clusterFallback(shipments);
     }
   }
 
   async predictDelayRisk(data, requestId) {
+    this._markRequest('delay');
     try {
       const res = await _post('/predict-delay-risk', data, requestId);
+      this._markSuccess();
       return { ...res, fallback: false };
     } catch (err) {
       if (!shouldUseFallback(err)) throw err;
       logger.warn(`ML delay risk failed: ${err.message}`);
+      this._markFallback('delay', err.message);
       return _delayFallback(data);
     }
   }
 
   async estimateFuel(data, requestId) {
+    this._markRequest('fuel');
     try {
       const res = await _post('/estimate-fuel', data, requestId);
+      this._markSuccess();
       return { ...res, fallback: false };
     } catch (err) {
       if (!shouldUseFallback(err)) throw err;
       logger.warn(`ML fuel estimation failed: ${err.message}`);
+      this._markFallback('fuel', err.message);
       return _fuelFallback(data);
     }
   }
 
   async optimizeCargo(data, requestId) {
+    this._markRequest('cargo');
     const res = await _post('/optimize-cargo', data, requestId, 15_000);
+    this._markSuccess();
     return { ...res, fallback: false };
   }
 
@@ -239,20 +298,33 @@ class MLService {
   }
 
   async triggerRetrain(requestId, backendUrl, authHeader) {
+    TELEMETRY.retrain.lastAttemptAt = Date.now();
     // Bypass circuit breaker — this is an admin action, not a prediction
-    const res = await axios.post(`${ML_URL}/retrain`, {
-      backend_url: backendUrl || process.env.BACKEND_URL || 'http://localhost:5000',
-      auth_header: authHeader || '',
-    }, {
-      timeout: 120_000,
-      headers: {
-        'X-ML-API-Key': ML_API_KEY,
-        'X-Request-ID': requestId || '',
-        'Content-Type': 'application/json',
-      },
-    });
-    recordSuccess(); // reset circuit on success
-    return res.data;
+    try {
+      const res = await axios.post(`${ML_URL}/retrain`, {
+        backend_url: backendUrl || process.env.BACKEND_URL || 'http://localhost:5000',
+        auth_header: authHeader || '',
+      }, {
+        timeout: 120_000,
+        headers: {
+          'X-ML-API-Key': ML_API_KEY,
+          'X-Request-ID': requestId || '',
+          'Content-Type': 'application/json',
+        },
+      });
+      recordSuccess(); // reset circuit on success
+      TELEMETRY.retrain.lastSuccessAt = Date.now();
+      TELEMETRY.retrain.lastStatus = 'success';
+      TELEMETRY.retrain.lastResultSummary = {
+        results: res.data?.results || null,
+        dataCounts: res.data?.data_counts || null,
+      };
+      return res.data;
+    } catch (err) {
+      TELEMETRY.retrain.lastStatus = 'failed';
+      TELEMETRY.retrain.lastResultSummary = { error: err.message };
+      throw err;
+    }
   }
 
   async getHealth(requestId) { return _get('/health', requestId, 5_000); }
@@ -264,6 +336,24 @@ class MLService {
       open: isCircuitOpen(),
       failures: CIRCUIT.failures,
       openedAt: CIRCUIT.openedAt,
+    };
+  }
+
+  getTelemetry() {
+    const fallbackRate = TELEMETRY.requests > 0
+      ? Number(((TELEMETRY.fallbacks / TELEMETRY.requests) * 100).toFixed(2))
+      : 0;
+    return {
+      uptimeSeconds: Math.floor((Date.now() - TELEMETRY.startedAt) / 1000),
+      requests: TELEMETRY.requests,
+      successes: TELEMETRY.successes,
+      fallbacks: TELEMETRY.fallbacks,
+      fallbackRatePercent: fallbackRate,
+      degraded: fallbackRate >= Number(process.env.ML_DEGRADED_FALLBACK_RATE_PERCENT || 25),
+      byType: TELEMETRY.byType,
+      lastFallbackAt: TELEMETRY.lastFallbackAt,
+      lastFallbackReason: TELEMETRY.lastFallbackReason,
+      retrain: TELEMETRY.retrain,
     };
   }
 }

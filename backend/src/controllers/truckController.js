@@ -142,7 +142,7 @@ async function createTruck(req, res, next) {
             const dest = shipment.destination || {};
             const lat1 = Number(origin.lat), lng1 = Number(origin.lng);
             const lat2 = Number(dest.lat), lng2 = Number(dest.lng);
-            let distanceKm = 700;
+            let distanceKm = null;
             if ([lat1, lng1, lat2, lng2].every(Number.isFinite)) {
               const R = 6371;
               const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -150,6 +150,13 @@ async function createTruck(req, res, next) {
               const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
               distanceKm = Number((R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(2));
             }
+            if (!Number.isFinite(distanceKm) || distanceKm <= 0) continue;
+
+            const modelVersionTag = (result, baseVersion = '2.1.0') => {
+              const source = result?.source || (result?.fallback ? 'heuristic_fallback' : 'ml_service');
+              const reason = result?.fallback ? `reason=${(result?.fallback_reason || 'service_error').replace(/\s+/g, '_')}` : 'reason=none';
+              return `${result?.fallback ? 'fallback-heuristic' : baseVersion}|source=${source}|${reason}`;
+            };
 
             const [etaResult, fuelResult, delayResult] = await Promise.all([
               mlService.predictDeliveryTime({ weight_kg: shipment.weightKg, distance_km: distanceKm, truck_type: truckType, traffic_condition: 'MODERATE', weather_condition: 'CLEAR' }),
@@ -158,12 +165,12 @@ async function createTruck(req, res, next) {
             ]);
 
             const predictions = [];
-            if (etaResult?.predicted_hours != null) predictions.push({ shipmentId: shipment.id, type: 'ETA_HOURS', value: etaResult.predicted_hours, confidence: etaResult.confidence ?? null, modelVersion: etaResult.fallback ? 'fallback-heuristic' : '2.0.0' });
+            if (etaResult?.predicted_hours != null) predictions.push({ shipmentId: shipment.id, type: 'ETA_HOURS', value: etaResult.predicted_hours, confidence: etaResult.confidence ?? null, modelVersion: modelVersionTag(etaResult) });
             const fuelLiters = fuelResult?.estimated_liters;
-            if (fuelLiters != null) predictions.push({ shipmentId: shipment.id, type: 'FUEL_ESTIMATE_LITERS', value: fuelLiters, confidence: fuelResult.confidence ?? null, modelVersion: fuelResult.fallback ? 'fallback-heuristic' : '2.0.0' });
+            if (fuelLiters != null) predictions.push({ shipmentId: shipment.id, type: 'FUEL_ESTIMATE_LITERS', value: fuelLiters, confidence: fuelResult.confidence ?? null, modelVersion: modelVersionTag(fuelResult) });
             const co2Kg = fuelResult?.co2_emissions_kg ?? fuelResult?.co2_kg ?? mlService.estimateCo2(distanceKm, truckType);
-            if (co2Kg != null) predictions.push({ shipmentId: shipment.id, type: 'CO2_KG', value: co2Kg, confidence: null, modelVersion: 'derived-from-fuel-model' });
-            if (delayResult?.delay_probability != null) predictions.push({ shipmentId: shipment.id, type: 'DELAY_RISK_PERCENT', value: delayResult.delay_probability, confidence: delayResult.confidence ?? null, modelVersion: delayResult.fallback ? 'fallback-heuristic' : '2.0.0' });
+            if (co2Kg != null) predictions.push({ shipmentId: shipment.id, type: 'CO2_KG', value: co2Kg, confidence: null, modelVersion: `${modelVersionTag(fuelResult)}|derived=co2` });
+            if (delayResult?.delay_probability != null) predictions.push({ shipmentId: shipment.id, type: 'DELAY_RISK_PERCENT', value: delayResult.delay_probability, confidence: delayResult.confidence ?? null, modelVersion: modelVersionTag(delayResult) });
 
             if (predictions.length > 0) {
               // Upsert: delete old predictions of same types, insert new ones

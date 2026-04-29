@@ -27,6 +27,84 @@ function inferCargoType(req) {
   return "GENERAL";
 }
 
+function resolveDistanceKm(shipment) {
+  const ROAD_DISTANCE_FACTOR = 1.25; // Approximate road distance from straight-line distance
+  const bookingDistance = Number(shipment?.bookings?.[0]?.distanceKm);
+  if (Number.isFinite(bookingDistance) && bookingDistance > 0) return bookingDistance;
+
+  const geoDistance = haversineKm(
+    shipment?.pickupLocation?.lat,
+    shipment?.pickupLocation?.lng,
+    shipment?.destination?.lat,
+    shipment?.destination?.lng,
+  );
+  if (Number.isFinite(geoDistance) && geoDistance > 0) return Math.round(geoDistance * ROAD_DISTANCE_FACTOR);
+  return null;
+}
+
+function normalizeCargoResult(payload) {
+  if (!payload) return null;
+  const selectedItems = payload.selected_items || payload.loaded_items || [];
+  const skippedItems = payload.skipped_items || [];
+  return {
+    ...payload,
+    loaded_items: selectedItems,
+    skipped_items: skippedItems,
+    total_weight: payload.total_weight ?? payload.total_weight_kg ?? null,
+    total_volume: payload.total_volume ?? payload.total_volume_m3 ?? null,
+  };
+}
+
+function getClusterPayload(clusterData) {
+  // Backend may return either { result: { clusters... } } or { clusters... }.
+  return clusterData?.result ?? clusterData ?? {};
+}
+
+function getResultMeta(result) {
+  if (!result) return { sourceLabel: "No data", tone: "slate" };
+  if (result.fallback) return { sourceLabel: "Fallback heuristic", tone: "amber" };
+  return { sourceLabel: "ML model", tone: "emerald" };
+}
+
+function getModelHealth(metric, value) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return null;
+
+  if (metric === "accuracy" || metric === "r2" || metric === "f1_score" || metric === "roc_auc") {
+    if (v >= 0.85) return { label: "Healthy", tone: "emerald" };
+    if (v >= 0.7) return { label: "Watch", tone: "amber" };
+    return { label: "Needs retrain", tone: "rose" };
+  }
+  if (metric.includes("mae")) {
+    if (v <= 3) return { label: "Healthy", tone: "emerald" };
+    if (v <= 6) return { label: "Watch", tone: "amber" };
+    return { label: "Needs retrain", tone: "rose" };
+  }
+  return null;
+}
+
+function calculatePredictionAudit(shipments) {
+  const delivered = (shipments || []).filter((s) => s.status === "DELIVERED");
+  const rows = delivered
+    .map((s) => {
+      const etaPred = (s.predictions || []).find((p) => p.type === "ETA_HOURS");
+      const b = (s.bookings || [])[0];
+      const start = b?.pickedUpAt ? new Date(b.pickedUpAt).getTime() : null;
+      const end = b?.deliveredAt ? new Date(b.deliveredAt).getTime() : null;
+      if (!etaPred || !start || !end || end <= start) return null;
+      const actualHours = (end - start) / 3_600_000;
+      const predictedHours = Number(etaPred.value);
+      const absError = Math.abs(actualHours - predictedHours);
+      return { actualHours, predictedHours, absError };
+    })
+    .filter(Boolean);
+
+  if (rows.length === 0) return null;
+  const mae = rows.reduce((sum, r) => sum + r.absError, 0) / rows.length;
+  const mape = rows.reduce((sum, r) => sum + (r.absError / Math.max(r.actualHours, 0.1)), 0) / rows.length;
+  return { sampleSize: rows.length, maeHours: mae, mapePercent: mape * 100 };
+}
+
 const MODEL_LABELS = {
   truck_recommender: "Truck Recommender",
   delivery_predictor: "Delivery Predictor",
@@ -101,7 +179,7 @@ function DelayGauge({ value = 0, label }) {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-slate-600 dark:text-slate-300">Delay Risk</span>
-        <span className={`text-2xl font-bold ${textColor}`}>{pct.toFixed(0)}%</span>
+        <span className={`text-2xl font-bold ${textColor}`}>{pct.toFixed(1)}%</span>
       </div>
       <div className="h-4 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
         <div
@@ -213,7 +291,7 @@ export default function MlInsightsPage() {
     queryKey: ["ml-clusters"],
     queryFn: () => shipmentService.getClusters({ status: "PENDING" }),
     staleTime: 60_000,
-    enabled: Boolean(user) && user?.role !== "DEALER",
+    enabled: Boolean(user),
   });
 
   // ── retrain mutation ───────────────────────────────────────────────────────
@@ -290,25 +368,33 @@ export default function MlInsightsPage() {
     if (!shipment) { runningRef.current = false; setRunning(false); return; }
 
     const truck = trucks.find((t) => t.id === truckId);
-    const distKm = haversineKm(
-      shipment.pickupLocation?.lat, shipment.pickupLocation?.lng,
-      shipment.destination?.lat, shipment.destination?.lng,
-    ) || 700;
+    const distKm = resolveDistanceKm(shipment);
     const cargoType = inferCargoType(shipment.requirements);
     const truckType = truck?.truckType || "CONTAINER_20FT";
 
     const [tr, eta, delay, fuel] = await Promise.allSettled([
-      mlService.predict({
-        prediction_type: "truck",
-        weight_kg: shipment.weightKg,
-        volume_m3: shipment.volumeM3 ?? 1,
-        distance_km: distKm,
-        cargo_type: cargoType,
-        priority: shipment.deadline ? "URGENT" : "NORMAL",
-      }),
-      mlService.predictDelivery(shipmentId, { weather: wx, traffic: traf }),
-      mlService.predictDelay(shipmentId, { weather: wx, traffic: traf, time_of_day: tod }).catch(() =>
-        mlService.predict({
+      distKm
+        ? mlService.predict({
+          prediction_type: "truck",
+          weight_kg: shipment.weightKg,
+          volume_m3: shipment.volumeM3 ?? 1,
+          distance_km: distKm,
+          cargo_type: cargoType,
+          priority: shipment.deadline ? "URGENT" : "NORMAL",
+        })
+        : Promise.resolve(null),
+      distKm
+        ? mlService.predict({
+          prediction_type: "delivery",
+          weight_kg: shipment.weightKg,
+          distance_km: distKm,
+          truck_type: truckType,
+          traffic_condition: traf,
+          weather_condition: wx,
+        })
+        : Promise.resolve(null),
+      distKm
+        ? mlService.predict({
           prediction_type: "delay",
           distance_km: distKm,
           weight_kg: shipment.weightKg,
@@ -317,14 +403,16 @@ export default function MlInsightsPage() {
           traffic_condition: traf,
           time_of_day: tod,
         })
-      ),
-      mlService.estimateFuel({ distance_km: distKm, weight_kg: shipment.weightKg, truck_type: truckType }),
+        : Promise.resolve(null),
+      distKm
+        ? mlService.estimateFuel({ distance_km: distKm, weight_kg: shipment.weightKg, truck_type: truckType })
+        : Promise.resolve(null),
     ]);
 
-    if (tr.status === "fulfilled") setTruckResult(tr.value?.result ?? tr.value);
+    if (tr.status === "fulfilled" && tr.value) setTruckResult(tr.value?.result ?? tr.value);
     if (eta.status === "fulfilled") setEtaResult(eta.value?.result ?? eta.value);
-    if (delay.status === "fulfilled") setDelayResult(delay.value?.result ?? delay.value);
-    if (fuel.status === "fulfilled") setFuelResult(fuel.value?.result ?? fuel.value);
+    if (delay.status === "fulfilled" && delay.value) setDelayResult(delay.value?.result ?? delay.value);
+    if (fuel.status === "fulfilled" && fuel.value) setFuelResult(fuel.value?.result ?? fuel.value);
 
     if (truck && shipment.weightKg) {
       try {
@@ -334,7 +422,7 @@ export default function MlInsightsPage() {
           truck_capacity_m3: truck.capacityM3 ?? 50,
           items,
         });
-        setCargoResult(cargo?.result ?? cargo);
+        setCargoResult(normalizeCargoResult(cargo?.result ?? cargo));
       } catch (_) { }
     }
 
@@ -355,12 +443,11 @@ export default function MlInsightsPage() {
 
   const selectedShipment = shipments.find((s) => s.id === selectedShipmentId);
   const selectedTruck = trucks.find((t) => t.id === selectedTruckId);
-  const distKm = selectedShipment
-    ? haversineKm(
-      selectedShipment.pickupLocation?.lat, selectedShipment.pickupLocation?.lng,
-      selectedShipment.destination?.lat, selectedShipment.destination?.lng,
-    )
-    : null;
+  const distKm = selectedShipment ? resolveDistanceKm(selectedShipment) : null;
+  const clusterPayload = getClusterPayload(clusterQuery.data);
+  const clusters = clusterPayload?.clusters || [];
+  const predictionAudit = calculatePredictionAudit(shipments);
+  const mlTelemetry = modelsQuery.data?.telemetry || {};
 
   // ── status badge ───────────────────────────────────────────────────────────
   const statusBadge = running ? (
@@ -504,6 +591,9 @@ export default function MlInsightsPage() {
                   ML model
                 </span>
               )}
+              {truckResult?.confidence != null && (
+                <div className="text-xs text-slate-500 dark:text-slate-400">Confidence: {percent((truckResult.confidence || 0) * 100, 1)}</div>
+              )}
             </div>
           </div>
         </div>
@@ -524,15 +614,17 @@ export default function MlInsightsPage() {
             <div className="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/50">
               <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">ETA</div>
               <div className="text-3xl font-bold tracking-tight text-slate-800 dark:text-slate-100">
-                {etaResult?.predicted_hours != null ? formatNumber(etaResult.predicted_hours) : "—"}
+                {etaResult?.predicted_hours != null ? formatNumber(etaResult.predicted_hours, 2) : "—"}
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">hours</div>
+              <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{getResultMeta(etaResult).sourceLabel}</div>
             </div>
             <div className="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/50">
               <DelayGauge
                 value={delayResult?.delay_probability ?? 0}
                 label={delayResult?.risk_level}
               />
+              <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{getResultMeta(delayResult).sourceLabel}</div>
             </div>
           </div>
         </div>
@@ -586,6 +678,7 @@ export default function MlInsightsPage() {
                 Efficiency: <span className="font-medium text-slate-700 dark:text-slate-200">{fuelResult.efficiency_rating}</span>
               </div>
             )}
+            <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">{getResultMeta(fuelResult).sourceLabel}</div>
           </div>
         </div>
 
@@ -613,13 +706,13 @@ export default function MlInsightsPage() {
                   <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
                     <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">Items loaded</div>
                     <div className="text-xl font-bold text-slate-800 dark:text-slate-100">
-                      {cargoResult?.loaded_items?.length ?? "—"}
+                      {cargoResult?.loaded_items?.length ?? cargoResult?.items_loaded ?? "—"}
                     </div>
                   </div>
                   <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
                     <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">Skipped</div>
                     <div className="text-xl font-bold text-slate-800 dark:text-slate-100">
-                      {cargoResult?.skipped_items?.length ?? "—"}
+                      {cargoResult?.skipped_items?.length ?? cargoResult?.items_rejected ?? "—"}
                     </div>
                   </div>
                 </div>
@@ -628,11 +721,64 @@ export default function MlInsightsPage() {
                     Total weight: <span className="font-medium text-slate-700 dark:text-slate-200">{formatNumber(cargoResult.total_weight)} kg</span>
                   </div>
                 )}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-xs dark:border-slate-700 dark:bg-slate-800/40">
+                  <div className="mb-2 font-semibold text-slate-700 dark:text-slate-200">Loaded items</div>
+                  {(cargoResult?.loaded_items || []).length === 0 ? (
+                    <div className="text-slate-500 dark:text-slate-400">No loaded item details available</div>
+                  ) : (
+                    <div className="space-y-1 text-slate-600 dark:text-slate-300">
+                      {(cargoResult.loaded_items || []).slice(0, 6).map((it, i) => (
+                        <div key={it.id || i}>• {it.id || `item-${i + 1}`} · {formatNumber(it.weight_kg)} kg · {formatNumber(it.volume_m3)} m³</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-xs dark:border-slate-700 dark:bg-slate-800/40">
+                  <div className="mb-2 font-semibold text-slate-700 dark:text-slate-200">Skipped items</div>
+                  {(cargoResult?.skipped_items || []).length === 0 ? (
+                    <div className="text-slate-500 dark:text-slate-400">No skipped items</div>
+                  ) : (
+                    <div className="space-y-1 text-slate-600 dark:text-slate-300">
+                      {(cargoResult.skipped_items || []).slice(0, 6).map((it, i) => (
+                        <div key={it.id || i}>• {it.id || `item-${i + 1}`} · {formatNumber(it.weight_kg)} kg · {formatNumber(it.volume_m3)} m³</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* ── Prediction quality audit ── */}
+      <Card>
+        <CardHeader
+          title="Prediction Audit"
+          subtitle="How close ETA predictions were to completed deliveries."
+          eyebrow="Quality"
+        />
+        {!predictionAudit ? (
+          <div className="text-sm text-slate-500 dark:text-slate-400">
+            Not enough delivered shipments with ETA prediction + pickup/delivery timestamps.
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/30">
+              <div className="text-xs text-slate-500 dark:text-slate-400">Samples</div>
+              <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">{predictionAudit.sampleSize}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/30">
+              <div className="text-xs text-slate-500 dark:text-slate-400">ETA MAE</div>
+              <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">{formatNumber(predictionAudit.maeHours, 2)} h</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/30">
+              <div className="text-xs text-slate-500 dark:text-slate-400">Avg % error</div>
+              <div className="text-2xl font-semibold text-slate-800 dark:text-slate-100">{formatNumber(predictionAudit.mapePercent, 1)}%</div>
+            </div>
+          </div>
+        )}
+      </Card>
 
       {/* ── Bottom section: Model Registry + Clustering ── */}
       <div className="grid gap-5 xl:grid-cols-2">
@@ -643,7 +789,31 @@ export default function MlInsightsPage() {
             title="Model Registry"
             subtitle="Live accuracy metrics from the ML service."
             eyebrow="Models"
+            actions={mlTelemetry?.retrain?.lastSuccessAt ? (
+              <div className="text-right text-xs text-slate-500 dark:text-slate-400">
+                <div>Retrained {formatAgo(new Date(mlTelemetry.retrain.lastSuccessAt))}</div>
+                {mlTelemetry?.retrain?.lastResultSummary?.dataCounts && (
+                  <div>
+                    data points: {Object.values(mlTelemetry.retrain.lastResultSummary.dataCounts).reduce((sum, n) => sum + (Number(n) || 0), 0)}
+                  </div>
+                )}
+              </div>
+            ) : null}
           />
+          {(mlTelemetry?.fallbackRatePercent != null) && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                mlTelemetry.degraded
+                  ? "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                  : "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+              }`}>
+                ML {mlTelemetry.degraded ? "Degraded" : "Healthy"}
+              </span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                fallback rate {formatNumber(mlTelemetry.fallbackRatePercent, 2)}% · requests {mlTelemetry.requests ?? 0}
+              </span>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             {Object.entries(modelsQuery.data?.models || {}).map(([key, model]) => (
               <div
@@ -671,13 +841,28 @@ export default function MlInsightsPage() {
                       const numVal = parseFloat(value);
                       const isPercent = metric === "accuracy" || metric === "r2" || metric === "f1_score";
                       const barVal = isPercent ? numVal * 100 : null;
+                      const health = getModelHealth(metric, value);
                       return (
                         <div key={metric}>
                           <div className="mb-1 flex items-center justify-between text-xs">
                             <span className="text-slate-500 dark:text-slate-400 capitalize">{metric.replace(/_/g, " ")}</span>
-                            <span className="font-semibold text-slate-700 dark:text-slate-200">
-                              {value ?? "—"}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-slate-700 dark:text-slate-200">
+                                {value ?? "—"}
+                              </span>
+                              {health && (
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                  health.tone === "emerald"
+                                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                                    : health.tone === "amber"
+                                      ? "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+                                      : "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                                }`}
+                                >
+                                  {health.label}
+                                </span>
+                              )}
+                            </div>
                           </div>
                           {barVal != null && (
                             <ProgressBar value={barVal} />
@@ -699,21 +884,27 @@ export default function MlInsightsPage() {
             eyebrow="Geo"
           />
           <div className="h-[340px] overflow-hidden rounded-2xl">
-            <MapContainer center={[20.5937, 78.9629]} zoom={4} scrollWheelZoom>
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              {(clusterQuery.data?.result?.clusters || []).flatMap((cluster, index) =>
-                (cluster.shipments || []).map((s, si) => (
-                  <CircleMarker
-                    key={`${index}-${s.id ?? si}`}
-                    center={[s.latitude, s.longitude]}
-                    radius={8}
-                    pathOptions={{ color: ["#2563eb", "#7c3aed", "#059669", "#f59e0b"][index % 4] }}
-                  >
-                    <Popup>{s.id || `Cluster ${index + 1} · ${si + 1}`}</Popup>
-                  </CircleMarker>
-                ))
-              )}
-            </MapContainer>
+            {clusters.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500 dark:text-slate-400">
+                {clusterPayload?.message || "No cluster data yet (need at least 2 geocoded pending shipments)."}
+              </div>
+            ) : (
+              <MapContainer center={[20.5937, 78.9629]} zoom={4} scrollWheelZoom>
+                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                {clusters.flatMap((cluster, index) =>
+                  (cluster.shipments || []).map((s, si) => (
+                    <CircleMarker
+                      key={`${index}-${s.id ?? s.shipment_index ?? si}`}
+                      center={[s.latitude, s.longitude]}
+                      radius={8}
+                      pathOptions={{ color: ["#2563eb", "#7c3aed", "#059669", "#f59e0b"][index % 4] }}
+                    >
+                      <Popup>{s.id || `Cluster ${index + 1} · ${si + 1}`}</Popup>
+                    </CircleMarker>
+                  ))
+                )}
+              </MapContainer>
+            )}
           </div>
         </Card>
       </div>

@@ -18,7 +18,9 @@ function inferCargoType(requirements) {
 }
 
 function getPredictionModelVersion(result) {
-  return result?.fallback ? 'fallback-heuristic' : '2.0.0';
+  const source = result?.source || (result?.fallback ? 'heuristic_fallback' : 'ml_service');
+  const reason = result?.fallback ? `reason=${(result?.fallback_reason || 'service_error').replace(/\s+/g, '_')}` : 'reason=none';
+  return `${result?.fallback ? 'fallback-heuristic' : '2.1.0'}|source=${source}|${reason}`;
 }
 
 function shipmentDistanceKm(pickupLocation, destination) {
@@ -26,7 +28,7 @@ function shipmentDistanceKm(pickupLocation, destination) {
   const lng1 = Number(pickupLocation?.lng);
   const lat2 = Number(destination?.lat);
   const lng2 = Number(destination?.lng);
-  if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) return 700;
+  if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) return null;
 
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -149,6 +151,11 @@ async function createShipment(req, res, next) {
       try {
         const cargo_type = inferCargoType(requirements);
         const distanceKm = shipmentDistanceKm(pickupLocation, destination);
+
+        if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
+          logger.warn(`Skipping auto-predictions for shipment ${shipment.id}: invalid distance`);
+          return;
+        }
 
         const truckRec = await mlService.predictTruckRecommendation({
           weight_kg: weightKg,

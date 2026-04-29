@@ -9,6 +9,12 @@ const { asyncHandler, AppError } = require('../helpers/errors');
 const { emitShipmentPredictionsUpdated } = require('../helpers/realtime');
 const logger = require('../config/logger');
 
+function modelVersionTag(result, baseVersion = '2.1.0') {
+  const source = result?.source || (result?.fallback ? 'heuristic_fallback' : 'ml_service');
+  const reason = result?.fallback ? `reason=${(result?.fallback_reason || 'service_error').replace(/\s+/g, '_')}` : 'reason=none';
+  return `${result?.fallback ? 'fallback' : baseVersion}|source=${source}|${reason}`;
+}
+
 // Health / info
 const getMlHealth = asyncHandler(async (req, res) => {
   try {
@@ -33,7 +39,7 @@ const getMlHealth = asyncHandler(async (req, res) => {
 
 const getModelsInfo = asyncHandler(async (req, res) => {
   const info = await mlService.getModelsInfo(req.requestId);
-  res.json({ success: true, ...info });
+  res.json({ success: true, ...info, telemetry: mlService.getTelemetry() });
 });
 
 // Unified predict
@@ -97,7 +103,7 @@ const predictDeliveryTime = asyncHandler(async (req, res) => {
         type: 'ETA_HOURS',
         value: result.predicted_hours ?? 0,
         confidence: result.confidence ?? null,
-        modelVersion: result.fallback ? 'fallback' : '2.1.0',
+        modelVersion: modelVersionTag(result),
       },
     }),
   ]);
@@ -173,7 +179,7 @@ const predictDelayRisk = asyncHandler(async (req, res) => {
         type: 'DELAY_RISK_PERCENT',
         value: result.delay_probability ?? 0,
         confidence: result.confidence ?? null,
-        modelVersion: result.fallback ? 'fallback' : '2.1.0',
+        modelVersion: modelVersionTag(result),
       },
     }),
   ]);

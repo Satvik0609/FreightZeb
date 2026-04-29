@@ -7,6 +7,7 @@
 const cron = require('node-cron');
 const { prisma } = require('../config/db');
 const logger = require('../config/logger');
+const mlService = require('./mlService');
 
 // ── Job 1: Mark overdue invoices ─────────────────────────────────────────────
 // Runs every day at 02:00 AM
@@ -71,10 +72,43 @@ function scheduleNotificationCleanup() {
     logger.info('Cron: notification cleanup scheduled (weekly Sunday 03:00)');
 }
 
+// ── Job 4: ML telemetry report + optional auto-retrain ───────────────────────
+// Report hourly, retrain daily at 04:00 if enabled
+function scheduleMlMaintenance() {
+    cron.schedule('0 * * * *', async () => {
+        try {
+            const telemetry = mlService.getTelemetry();
+            logger.info(`Cron ML report: requests=${telemetry.requests}, fallbackRate=${telemetry.fallbackRatePercent}% degraded=${telemetry.degraded}`);
+        } catch (err) {
+            logger.error(`Cron ML report failed: ${err.message}`);
+        }
+    });
+    logger.info('Cron: ML report job scheduled (hourly)');
+
+    cron.schedule('0 4 * * *', async () => {
+        const enabled = String(process.env.ML_AUTO_RETRAIN_ENABLED || 'false').toLowerCase() === 'true';
+        if (!enabled) return;
+        try {
+            const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
+            const authHeader = process.env.ML_RETRAIN_AUTH_HEADER || '';
+            if (!authHeader) {
+                logger.warn('Cron ML retrain skipped: ML_RETRAIN_AUTH_HEADER not configured');
+                return;
+            }
+            await mlService.triggerRetrain(`cron-${Date.now()}`, backendUrl, authHeader);
+            logger.info('Cron ML retrain completed successfully');
+        } catch (err) {
+            logger.error(`Cron ML retrain failed: ${err.message}`);
+        }
+    });
+    logger.info('Cron: ML auto-retrain scheduled (daily 04:00, env-gated)');
+}
+
 function startAllJobs() {
     scheduleOverdueInvoices();
     scheduleTokenCleanup();
     scheduleNotificationCleanup();
+    scheduleMlMaintenance();
     logger.info('All cron jobs started');
 }
 
