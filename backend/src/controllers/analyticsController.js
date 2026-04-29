@@ -1,25 +1,97 @@
 const { prisma } = require('../config/db');
 
+function monthKey(date) {
+    const d = new Date(date);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+}
+
+function monthLabel(ym) {
+    const [year, month] = ym.split('-').map(Number);
+    return new Date(Date.UTC(year, month - 1, 1)).toLocaleString('en-US', {
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+    });
+}
+
+function buildMonthRange(monthsBack = 12) {
+    const now = new Date();
+    const months = [];
+    for (let i = monthsBack - 1; i >= 0; i--) {
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+        months.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`);
+    }
+    return months;
+}
+
+function coerceAmount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function bookingRevenue(booking) {
+    const pricing = booking?.pricing || {};
+    const invoicePricing = booking?.invoice?.pricing || {};
+    return (
+        coerceAmount(pricing.total) ||
+        coerceAmount(pricing.grandTotal) ||
+        coerceAmount(invoicePricing.total) ||
+        coerceAmount(invoicePricing.grandTotal) ||
+        0
+    );
+}
+
+function seriesFromRecords(records, months, opts = {}) {
+    const { dateKey = 'createdAt', valueGetter = () => 1, valueKey = 'count' } = opts;
+    const buckets = Object.fromEntries(months.map((m) => [m, 0]));
+
+    records.forEach((r) => {
+        const dt = r?.[dateKey];
+        if (!dt) return;
+        const key = monthKey(dt);
+        if (!(key in buckets)) return;
+        buckets[key] += valueGetter(r);
+    });
+
+    return months.map((m) => ({
+        month: monthLabel(m),
+        [valueKey]: Number(buckets[m].toFixed(2)),
+    }));
+}
+
 // ── Warehouse analytics ──────────────────────────────────────────────────────
 async function getWarehouseAnalytics(req, res, next) {
     try {
         const warehouseId = req.user.id;
+        const months = buildMonthRange(12);
 
         const [
             totalShipments,
             byStatus,
             bookings,
             predictions,
+            shipmentRows,
+            deliveredRevenueRows,
         ] = await Promise.all([
             prisma.shipment.count({ where: { warehouseId } }),
             prisma.shipment.groupBy({ by: ['status'], where: { warehouseId }, _count: true }),
             prisma.booking.findMany({
                 where: { warehouseId, status: 'DELIVERED' },
-                select: { distanceKm: true, createdAt: true, deliveredAt: true },
+                select: { distanceKm: true, createdAt: true, deliveredAt: true, pricing: true, invoice: { select: { pricing: true } } },
             }),
             prisma.prediction.findMany({
                 where: { shipment: { warehouseId } },
                 select: { type: true, value: true },
+            }),
+            prisma.shipment.findMany({
+                where: { warehouseId },
+                select: { createdAt: true },
+            }),
+            prisma.booking.findMany({
+                where: { warehouseId, status: 'DELIVERED' },
+                select: { deliveredAt: true, pricing: true, invoice: { select: { pricing: true } } },
             }),
         ]);
 
@@ -34,6 +106,18 @@ async function getWarehouseAnalytics(req, res, next) {
         const co2Predictions = predictions.filter((p) => p.type === 'CO2_KG');
         const totalCo2Saved = co2Predictions.reduce((s, p) => s + p.value, 0);
 
+        const shipmentTrend = seriesFromRecords(shipmentRows, months, {
+            dateKey: 'createdAt',
+            valueGetter: () => 1,
+            valueKey: 'count',
+        });
+
+        const monthlySpend = seriesFromRecords(deliveredRevenueRows, months, {
+            dateKey: 'deliveredAt',
+            valueGetter: bookingRevenue,
+            valueKey: 'spend',
+        });
+
         res.json({
             success: true,
             analytics: {
@@ -44,6 +128,8 @@ async function getWarehouseAnalytics(req, res, next) {
                 avgEtaHours: avgEta ? parseFloat(avgEta.toFixed(2)) : null,
                 totalCo2SavedKg: parseFloat(totalCo2Saved.toFixed(2)),
             },
+            shipmentTrend,
+            monthlySpend,
         });
     } catch (err) {
         next(err);
@@ -54,19 +140,25 @@ async function getWarehouseAnalytics(req, res, next) {
 async function getDealerAnalytics(req, res, next) {
     try {
         const dealerId = req.user.id;
+        const months = buildMonthRange(12);
 
         const [
             totalTrucks,
             trucksByStatus,
             bookingsByStatus,
             deliveredBookings,
+            deliveredRevenueRows,
         ] = await Promise.all([
             prisma.truck.count({ where: { dealerId } }),
             prisma.truck.groupBy({ by: ['status'], where: { dealerId }, _count: true }),
             prisma.booking.groupBy({ by: ['status'], where: { dealerId }, _count: true }),
             prisma.booking.findMany({
                 where: { dealerId, status: 'DELIVERED' },
-                select: { distanceKm: true, optimScore: true },
+                select: { distanceKm: true, optimScore: true, deliveredAt: true, pricing: true, invoice: { select: { pricing: true } } },
+            }),
+            prisma.booking.findMany({
+                where: { dealerId, status: 'DELIVERED' },
+                select: { deliveredAt: true, pricing: true, invoice: { select: { pricing: true } } },
             }),
         ]);
 
@@ -76,8 +168,19 @@ async function getDealerAnalytics(req, res, next) {
             : null;
 
         // Fleet utilization = trucks not AVAILABLE / total
-        const availableCount = trucksByStatus.find((t) => t.status === 'AVAILABLE')?._count || 0;
+        const availableCount = trucksByStatus.find((t) => t.status === 'AVAILABLE')?._count?._all || 0;
         const utilizationPct = totalTrucks > 0 ? parseFloat((((totalTrucks - availableCount) / totalTrucks) * 100).toFixed(1)) : 0;
+
+        const deliveriesByMonth = seriesFromRecords(deliveredBookings, months, {
+            dateKey: 'deliveredAt',
+            valueGetter: () => 1,
+            valueKey: 'count',
+        });
+        const revenueByMonth = seriesFromRecords(deliveredRevenueRows, months, {
+            dateKey: 'deliveredAt',
+            valueGetter: bookingRevenue,
+            valueKey: 'revenue',
+        });
 
         res.json({
             success: true,
@@ -89,6 +192,8 @@ async function getDealerAnalytics(req, res, next) {
                 avgOptimizationScore: avgScore ? parseFloat(avgScore.toFixed(3)) : null,
                 fleetUtilizationPct: utilizationPct,
             },
+            revenueByMonth,
+            deliveriesByMonth,
         });
     } catch (err) {
         next(err);
@@ -98,6 +203,7 @@ async function getDealerAnalytics(req, res, next) {
 // ── Admin analytics ──────────────────────────────────────────────────────────
 async function getAdminAnalytics(req, res, next) {
     try {
+        const months = buildMonthRange(12);
         const [
             totalUsers,
             usersByRole,
@@ -108,6 +214,8 @@ async function getAdminAnalytics(req, res, next) {
             totalBookings,
             bookingsByStatus,
             recentBookings,
+            shipmentRows,
+            deliveredRevenueRows,
         ] = await Promise.all([
             prisma.user.count(),
             prisma.user.groupBy({ by: ['role'], _count: true }),
@@ -126,6 +234,13 @@ async function getAdminAnalytics(req, res, next) {
                     truck: { select: { registrationNo: true, truckType: true } },
                 },
             }),
+            prisma.shipment.findMany({
+                select: { createdAt: true },
+            }),
+            prisma.booking.findMany({
+                where: { status: 'DELIVERED' },
+                select: { deliveredAt: true, pricing: true, invoice: { select: { pricing: true } } },
+            }),
         ]);
 
         const deliveredBookings = await prisma.booking.findMany({
@@ -133,6 +248,22 @@ async function getAdminAnalytics(req, res, next) {
             select: { distanceKm: true },
         });
         const totalKm = deliveredBookings.reduce((s, b) => s + (b.distanceKm || 0), 0);
+
+        const shipmentTrend = seriesFromRecords(shipmentRows, months, {
+            dateKey: 'createdAt',
+            valueGetter: () => 1,
+            valueKey: 'count',
+        });
+        const revenueByMonth = seriesFromRecords(deliveredRevenueRows, months, {
+            dateKey: 'deliveredAt',
+            valueGetter: bookingRevenue,
+            valueKey: 'revenue',
+        });
+
+        const fleetUtilization = trucksByStatus.map((t) => ({
+            type: t.status,
+            count: t._count._all,
+        }));
 
         res.json({
             success: true,
@@ -144,6 +275,9 @@ async function getAdminAnalytics(req, res, next) {
                 totalDeliveredKm: parseFloat(totalKm.toFixed(2)),
             },
             recentBookings,
+            shipmentTrend,
+            revenueByMonth,
+            fleetUtilization,
         });
     } catch (err) {
         next(err);

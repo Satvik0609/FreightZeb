@@ -1,47 +1,98 @@
-# FreightZen — Setup Guide
+# FreightZen — Complete Setup Guide (Windows)
 
 ## Prerequisites
 
-- Node.js >= 20
-- Python >= 3.11
-- PostgreSQL database (Neon cloud recommended — free tier works)
-- Kaggle account (for downloading training datasets)
+| Tool | Version | Check |
+|------|---------|-------|
+| Node.js | >= 20 | `node -v` |
+| Python | >= 3.10 | `python --version` |
+| PostgreSQL | Neon cloud (already in `.env`) | — |
+
+> **No local database needed.** The project uses Neon cloud PostgreSQL.
+> The `DATABASE_URL` is already set in `backend/.env`.
 
 ---
 
-## Step 1 — Clone the repo
+## Quick Start (3 Terminals)
 
-```bash
-git clone <your-repo-url>
-cd FreightZen
-```
+Open **3 separate PowerShell terminals** and run one section in each.
 
 ---
 
-## Step 2 — Backend
+### Terminal 1 — Backend
 
-```bash
-cd backend
-
-# Copy environment template
-cp .env.example .env
-```
-
-Open `.env` and fill in:
-```env
-DATABASE_URL="postgresql://user:pass@host:5432/freightzen"
-JWT_SECRET="any-random-string-at-least-32-characters-long"
-```
-
-Then:
-```bash
+```powershell
+cd "c:\Users\DELL\Desktop\updated_FreightZeb\FreightZeb\backend"
 npm install
-npx prisma db push        # creates all tables in your database
-node prisma/seed.js       # seeds demo data (users, trucks, shipments)
-npm run dev               # starts backend on http://localhost:5000
+npm start
 ```
 
-**Default login credentials after seeding:**
+**Expected output:**
+```
+✅ Environment validated
+🚛 FreightZeb API → http://localhost:5000
+```
+
+> **If you see `EPERM: operation not permitted` on `prisma generate`:**
+> You do NOT need to run `prisma generate` to start the backend.
+> Just run `npm start` directly. If it fails, kill all Node processes first:
+> ```powershell
+> taskkill /F /IM node.exe
+> npm start
+> ```
+
+---
+
+### Terminal 2 — ML Service
+
+```powershell
+cd "c:\Users\DELL\Desktop\updated_FreightZeb\FreightZeb\ml\service"
+pip install -r requirements.txt
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+**Expected output:**
+```
+INFO: Application startup complete.
+INFO: Uvicorn running on http://127.0.0.1:8000
+```
+
+> The ML service loads 7 pre-trained models on startup (takes ~15 seconds).
+> All 6 `.joblib` model files are already included in `saved_models/`.
+
+---
+
+### Terminal 3 — Frontend
+
+```powershell
+cd "c:\Users\DELL\Desktop\updated_FreightZeb\FreightZeb\frontend"
+npm install
+npm run dev
+```
+
+**Expected output:**
+```
+VITE ready in ...ms
+➜  Local:   http://localhost:5173/
+```
+
+---
+
+## Verify everything is running
+
+Open a **4th terminal** and run:
+
+```powershell
+python -c "import requests; print('Backend:', requests.get('http://127.0.0.1:5000/health', timeout=5).status_code); print('ML:', requests.get('http://127.0.0.1:8000/health', timeout=5).status_code)"
+```
+
+Expected: `Backend: 200` and `ML: 200`
+
+Then open `http://localhost:5173` in your browser.
+
+---
+
+## Login Credentials
 
 | Role | Email | Password |
 |------|-------|----------|
@@ -51,86 +102,77 @@ npm run dev               # starts backend on http://localhost:5000
 
 ---
 
-## Step 3 — ML Service
+## Service URLs
 
-```bash
-cd ml/service
-
-# Install Python dependencies
-pip install -r requirements.txt
-```
-
-### Download Kaggle datasets
-
-The ML models need real datasets to train. Download them using the Kaggle API:
-
-1. Go to https://www.kaggle.com/settings
-2. Click **API** section → **Create New Token**
-3. This downloads `kaggle.json`
-4. Place it at:
-   - Windows: `C:\Users\<you>\.kaggle\kaggle.json`
-   - Mac/Linux: `~/.kaggle/kaggle.json`
-
-Then run:
-```bash
-python scripts/download_datasets.py
-```
-
-### Retrain the fuel estimator
-
-The fuel estimator model is too large for git (88MB). Retrain it once:
-
-```bash
-python -c "
-from models.fuel_estimator_v2 import FuelEstimatorV2
-FuelEstimatorV2(use_real_data=True, force_retrain=True)
-print('Fuel estimator ready')
-"
-```
-
-This takes about 2-3 minutes.
-
-> **Note:** All other 5 models (truck, delivery, delay, clusterer, route) are already
-> pre-trained and included in `saved_models/`. No retraining needed for those.
-
-### Start the ML service
-
-```bash
-python app.py
-```
-
-ML service starts on http://localhost:8000
-Interactive API docs at http://localhost:8000/docs
+| Service | URL | Notes |
+|---------|-----|-------|
+| Frontend | http://localhost:5173 | React app |
+| Backend API | http://localhost:5000 | Express / Prisma |
+| ML Service | http://localhost:8000 | FastAPI |
+| ML Swagger Docs | http://localhost:8000/docs | Interactive API docs |
+| Prisma Studio | http://localhost:5555 | `cd backend && npx prisma studio` |
 
 ---
 
-## Step 4 — Test with Postman
+## Feature Walkthrough
 
-1. Open Postman
-2. Click **Import** → select `FreightZen.postman_collection.json`
-3. Run **Auth → 01 Register (ADMIN)** then **02 Login**
-4. Token auto-saves — all other requests work automatically
+### As Warehouse (`ops@bharat-logistics.in`)
+1. Login → Dashboard shows your shipment stats and analytics
+2. **Shipments** → Create New Shipment (fill in origin, destination, weight, GPS coords)
+3. Open the shipment → click **Optimize** → AI ranks available trucks by score
+4. Select a truck → **Create Booking** → dealer is notified in real-time
+5. **ML Insights** → run Delivery Predictor, Delay Risk, Fuel Estimator, Cluster Shipments
+
+### As Dealer (`fleet@rajesh-transport.in`)
+1. Login → Dashboard shows your fleet stats and pending booking requests
+2. **Trucks** → Register a new truck (fill in registration, type, capacity, route)
+3. **Bookings** → Approve or Reject incoming requests
+4. Approve → Assign → Picked Up → In Transit → Delivered
+5. **Tracking** → Update GPS location for trucks in transit
+
+### As Admin (`admin@freightzen.in`)
+1. Login → Full system analytics
+2. **Admin → Users** → manage all accounts
+3. All shipments, trucks, bookings, invoices visible
+
+### Invoices
+- Invoices are **auto-created** when a booking reaches `DELIVERED` status
+- Only visible to the Warehouse user (the one who booked) and Admin
+
+### Notifications
+- Real-time notifications appear in the bell icon (top right)
+- Warehouse gets notified when booking is approved/rejected
+- Dealer gets notified when a new booking request comes in
 
 ---
 
-## Quick Reference
+## One-Click Reset (if database gets messy)
 
-| Service | URL | Command |
-|---------|-----|---------|
-| Backend API | http://localhost:5000 | `cd backend && npm run dev` |
-| ML Service | http://localhost:8000 | `cd ml/service && python app.py` |
-| ML Docs (Swagger) | http://localhost:8000/docs | (auto, when ML is running) |
-| Prisma Studio (DB viewer) | http://localhost:5555 | `cd backend && npx prisma studio` |
+```powershell
+cd "c:\Users\DELL\Desktop\updated_FreightZeb\FreightZeb\backend"
+node prisma/seed.js
+```
+
+This re-seeds all demo data without wiping existing users.
 
 ---
 
-## What's in the repo vs what you need to set up
+## Common Errors
 
-| Item | In repo? | Action needed |
-|------|----------|---------------|
-| All backend code | Yes | Just `npm install` |
-| All ML model code | Yes | Just `pip install` |
-| 5 pre-trained models | Yes | Nothing |
-| fuel_estimator model | No (88MB) | Retrain (Step 3) |
-| Kaggle datasets | No (3GB+) | Download (Step 3) |
-| `.env` secrets | No | Create from `.env.example` |
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `EPERM: operation not permitted` on prisma | Node process is locking the DLL | `taskkill /F /IM node.exe` then `npm start` |
+| `Error loading ASGI app. Could not import module "app"` | Wrong working directory for uvicorn | `cd ml/service` first, then run uvicorn |
+| Port 5173 already in use | Previous frontend still running | Close old terminal or kill: `taskkill /F /IM node.exe` |
+| `401 Unauthorized` on all requests | Token expired | Log out and log back in |
+| ML returns heuristic/fallback | ML service not running | Start Terminal 2 first |
+| Analytics shows zeros | No seeded data yet | Run `node prisma/seed.js` |
+
+---
+
+## Development Tips
+
+- **Prisma Studio** (database viewer): `cd backend && npx prisma studio` → opens at http://localhost:5555
+- **ML Swagger UI**: http://localhost:8000/docs — test any ML endpoint directly
+- **Backend logs**: printed in Terminal 1 (shows every API request + socket event)
+- **Re-seed data**: `cd backend && node prisma/seed.js` (safe to run multiple times)

@@ -33,7 +33,8 @@ const adminRoutes = require('./routes/adminRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const consolidationRoutes = require('./routes/consolidationRoutes');
 const loadingRoutes = require('./routes/loadingRoutes');
-const mlRoutes = require('./routes/mlRoutes');
+const mlRoutes   = require('./routes/mlRoutes');
+const mapsRoutes = require('./routes/mapsRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -129,7 +130,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/shipments', consolidationRoutes);
 app.use('/api/trucks', loadingRoutes);
-app.use('/api/ml', mlRoutes);
+app.use('/api/ml',   mlRoutes);
+app.use('/api/maps', mapsRoutes);
 
 // ── 404 + Global error handler ───────────────────────────────────────────────
 app.use(notFound);

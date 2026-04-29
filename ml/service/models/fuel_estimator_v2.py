@@ -324,9 +324,9 @@ class FuelEstimatorV2:
         rf_pred = self.rf_model.predict(X_scaled)[0]
         ensemble_pred = xgb_pred * 0.6 + rf_pred * 0.4
         
-        # Calculate cost and emissions
-        fuel_price_per_liter = 1.45
-        total_cost = ensemble_pred * fuel_price_per_liter
+        # Calculate cost and emissions (INR by default, configurable via env).
+        fuel_price_per_liter_inr = float(os.getenv('FUEL_PRICE_PER_LITER_INR', '90'))
+        total_cost_inr = ensemble_pred * fuel_price_per_liter_inr
         co2_kg = ensemble_pred * 2.68
         consumption_per_100km = (ensemble_pred / distance_km) * 100
         
@@ -337,7 +337,11 @@ class FuelEstimatorV2:
         
         return {
             'estimated_liters': round(float(ensemble_pred), 2),
-            'estimated_cost': round(float(total_cost), 2),
+            # Canonical fields
+            'estimated_cost_inr': round(float(total_cost_inr), 2),
+            'co2_kg': round(float(co2_kg), 2),
+            # Backward-compatible fields
+            'estimated_cost': round(float(total_cost_inr), 2),
             'consumption_per_100km': round(float(consumption_per_100km), 2),
             'co2_emissions_kg': round(float(co2_kg), 2),
             'model_r2_score': round(self.r2_score, 4),
@@ -351,7 +355,8 @@ class FuelEstimatorV2:
                 'random_forest': round(float(rf_pred), 2),
                 'ensemble': round(float(ensemble_pred), 2)
             },
-            'fuel_price_per_liter': fuel_price_per_liter,
+            'fuel_price_per_liter_inr': fuel_price_per_liter_inr,
+            'fuel_price_per_liter': fuel_price_per_liter_inr,
             'model_type': 'Ensemble (XGBoost + Random Forest)',
             'data_source': 'Real Kaggle Data' if self.use_real_data else 'Synthetic Data'
         }

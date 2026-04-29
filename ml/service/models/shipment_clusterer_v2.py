@@ -317,6 +317,7 @@ class ShipmentClustererV2:
                 clusters[label] = []
             clusters[label].append({
                 'shipment_index': idx,
+                'id': shipments[idx].get('id'),
                 'latitude': float(shipments[idx]['latitude']),
                 'longitude': float(shipments[idx]['longitude']),
                 'weight_kg': float(shipments[idx]['weight_kg']),

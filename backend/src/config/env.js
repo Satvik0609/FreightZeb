@@ -16,6 +16,7 @@ const OPTIONAL_DEFAULTS = {
     ML_SERVICE_URL: 'http://localhost:8000',
     ML_SERVICE_API_KEY: 'dev-ml-service-key',
     ML_TIMEOUT_MS: '10000',
+    GOOGLE_MAPS_API_KEY: '',  // Optional — needed for Live Tracking directions
 };
 
 function validateEnv() {

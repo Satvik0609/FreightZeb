@@ -45,7 +45,7 @@ services:
       LOG_LEVEL:          ${LOG_LEVEL:-info}
       PYTHONUNBUFFERED:   "1"
     volumes:
-      - ./ml/service/saved_models:/app/saved_models:ro
+      - ./ml/service/saved_models:/app/saved_models
     healthcheck:
       # Use /readyz so healthcheck only passes when models are loaded
       test: ["CMD", "curl", "-f",
@@ -92,7 +92,7 @@ services:
       DATABASE_URL:       postgresql://${POSTGRES_USER:-freightzen}:${POSTGRES_PASSWORD:-freightzen_secret}@postgres:5432/${POSTGRES_DB:-freightzen}?schema=public
       ML_SERVICE_URL:     http://ml-service:8000
       ML_SERVICE_API_KEY: ${ML_SERVICE_API_KEY:-dev-ml-service-key}
-      FRONTEND_URL:       ${FRONTEND_URL:-http://localhost:3000}
+      FRONTEND_URL:       ${FRONTEND_URL:-http://localhost:5173}
     depends_on:
       postgres:
         condition: service_healthy

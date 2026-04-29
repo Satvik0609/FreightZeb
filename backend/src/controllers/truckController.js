@@ -183,7 +183,9 @@ async function updateTruckLocation(req, res, next) {
     });
 
     const io = req.app.get('io');
-    io.to(`truck:${truck.id}`).emit('truck:location', { truckId: truck.id, location: updated.currentLocation });
+    const payload = { truckId: truck.id, location: updated.currentLocation };
+    io.to(`truck:${truck.id}`).emit('truck:location', payload);
+    io.to(`user:${truck.dealerId}`).emit('truck:location', payload);
 
     res.json({ success: true, truck: updated });
   } catch (err) {

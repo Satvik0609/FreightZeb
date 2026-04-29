@@ -5,7 +5,9 @@ const logger = require('../config/logger');
 async function getMyInvoices(req, res, next) {
     try {
         const { status, page = 1, limit = 20 } = req.query;
-        const skip = (Number(page) - 1) * Number(limit);
+        const take = Math.min(Number(limit) || 20, 100);
+        const pageNum = Number(page) || 1;
+        const skip = (pageNum - 1) * take;
         const where = { userId: req.user.id };
         if (status) where.status = status;
 
@@ -23,12 +25,21 @@ async function getMyInvoices(req, res, next) {
                 },
                 orderBy: { issuedAt: 'desc' },
                 skip,
-                take: Number(limit),
+                take,
             }),
             prisma.invoice.count({ where }),
         ]);
 
-        res.json({ success: true, total, page: Number(page), limit: Number(limit), invoices });
+        res.json({
+            success: true,
+            total,
+            page: pageNum,
+            limit: take,
+            totalPages: Math.ceil(total / take),
+            hasNextPage: skip + invoices.length < total,
+            invoices,
+            data: invoices, // compatibility alias
+        });
     } catch (err) {
         next(err);
     }
@@ -38,7 +49,9 @@ async function getMyInvoices(req, res, next) {
 async function getAllInvoices(req, res, next) {
     try {
         const { status, page = 1, limit = 20 } = req.query;
-        const skip = (Number(page) - 1) * Number(limit);
+        const take = Math.min(Number(limit) || 20, 100);
+        const pageNum = Number(page) || 1;
+        const skip = (pageNum - 1) * take;
         const where = {};
         if (status) where.status = status;
 
@@ -49,6 +62,7 @@ async function getAllInvoices(req, res, next) {
                     user: { select: { id: true, name: true, email: true, company: true } },
                     booking: {
                         include: {
+                            shipment: true,
                             truck: { select: { registrationNo: true } },
                             dealer: { select: { name: true, company: true } },
                         },
@@ -56,12 +70,21 @@ async function getAllInvoices(req, res, next) {
                 },
                 orderBy: { issuedAt: 'desc' },
                 skip,
-                take: Number(limit),
+                take,
             }),
             prisma.invoice.count({ where }),
         ]);
 
-        res.json({ success: true, total, page: Number(page), limit: Number(limit), invoices });
+        res.json({
+            success: true,
+            total,
+            page: pageNum,
+            limit: take,
+            totalPages: Math.ceil(total / take),
+            hasNextPage: skip + invoices.length < total,
+            invoices,
+            data: invoices, // compatibility alias
+        });
     } catch (err) {
         next(err);
     }

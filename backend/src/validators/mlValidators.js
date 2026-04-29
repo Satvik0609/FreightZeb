@@ -3,6 +3,7 @@ const { body, param, query } = require('express-validator');
 const truckTypes = ['SMALL_VAN', 'CONTAINER_20FT', 'CONTAINER_32FT', 'FLATBED_TRAILER', 'REEFER'];
 const trafficConditions = ['LIGHT', 'MODERATE', 'HEAVY', 'SEVERE'];
 const weatherConditions = ['CLEAR', 'CLOUDY', 'RAIN', 'STORM', 'FOG', 'SNOW'];
+const timeOfDayValues   = ['MORNING', 'AFTERNOON', 'EVENING', 'NIGHT'];
 const priorities = ['NORMAL', 'URGENT', 'EXPRESS'];
 
 const predictionTypeParam = [
@@ -31,7 +32,7 @@ const delayPredictionQueryRules = [
   ...shipmentIdParamRules,
   query('weather').optional().isIn(weatherConditions),
   query('traffic').optional().isIn(trafficConditions),
-  query('time_of_day').optional().isString().trim().notEmpty(),
+  query('time_of_day').optional().isIn(timeOfDayValues),
 ];
 
 const deliveryPredictionQueryRules = [

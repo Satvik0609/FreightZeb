@@ -8,6 +8,47 @@ const { prisma } = require('../config/db');
 const { asyncHandler, AppError } = require('../helpers/errors');
 const logger = require('../config/logger');
 
+function _haversineKm(from, to) {
+  const toNum = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const normalizePair = (point = {}) => {
+    let lat = toNum(point?.lat);
+    let lng = toNum(point?.lng);
+    if (lat === null || lng === null) return null;
+
+    // Auto-correct only when lat is clearly invalid and lng is lat-like.
+    if (Math.abs(lat) > 90 && Math.abs(lng) <= 90) {
+      [lat, lng] = [lng, lat];
+    }
+
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    return { lat, lng };
+  };
+
+  const calc = (a, b) => {
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const earthRadiusKm = 6371;
+    const dLat = toRad(b.lat - a.lat);
+    const dLng = toRad(b.lng - a.lng);
+    const h =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * earthRadiusKm * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  };
+
+  const a = normalizePair(from);
+  const b = normalizePair(to);
+  if (!a || !b) return 0;
+
+  // Deterministic result from normalized coordinates only.
+  const distance = calc(a, b);
+  if (!Number.isFinite(distance) || distance < 0) return 0;
+  return Number(distance.toFixed(1));
+}
+
 // ── Health / info ─────────────────────────────────────────────────────────────
 const getMlHealth = asyncHandler(async (req, res) => {
   try {
@@ -64,13 +105,20 @@ const getTruckRecommendation = asyncHandler(async (req, res) => {
 // ── Delivery time for a DB shipment ──────────────────────────────────────────
 const predictDeliveryTime = asyncHandler(async (req, res) => {
   const shipment = await _getShipmentOrThrow(req.params.shipmentId, req.user);
-  const booking = shipment.bookings?.[0];
-  if (!booking) throw AppError.badRequest('Shipment has no booking yet — create a booking first');
+  const latestBooking = shipment.bookings?.[0] ?? null;
+  const truckType = latestBooking?.truck?.truckType || 'CONTAINER_20FT';
+  const queryDistanceKm = Number(req.query.distance_km);
+  const shipmentDistanceKm = _haversineKm(shipment.pickupLocation, shipment.destination);
+  const distanceKm =
+    (Number.isFinite(queryDistanceKm) && queryDistanceKm > 0 ? queryDistanceKm : null) ||
+    shipmentDistanceKm ||
+    latestBooking?.distanceKm ||
+    1;
 
   const result = await mlService.predictDeliveryTime({
     weight_kg: shipment.weightKg,
-    distance_km: booking.distanceKm || 0,
-    truck_type: booking.truck?.truckType || 'CONTAINER_20FT',
+    distance_km: distanceKm,
+    truck_type: truckType,
     traffic_condition: req.query.traffic || 'MODERATE',
     weather_condition: req.query.weather || 'CLEAR',
   }, req.requestId);
@@ -121,24 +169,67 @@ const clusterShipments = asyncHandler(async (req, res) => {
     return res.json({ success: true, message: 'Not enough geocoded shipments', n_clusters: 0, clusters: [] });
   }
 
-  const result = await mlService.clusterShipments(formatted, req.requestId);
-  res.json({ success: true, result });
+  const mlResult = await mlService.clusterShipments(formatted, req.requestId);
+
+  // Normalize ML output into a stable API contract for the frontend.
+  // Frontend expects: cluster.count, cluster.totalWeight, cluster.center.{lat,lng}
+  const normalizedClusters = (mlResult?.clusters || []).map((cluster) => {
+    const shipmentCount = cluster?.shipment_count ?? cluster?.count ?? (cluster?.shipments?.length || 0);
+    const totalWeightKg = cluster?.total_weight_kg ?? cluster?.totalWeight ?? null;
+    const centerLat = cluster?.center_latitude ?? cluster?.center?.lat ?? null;
+    const centerLng = cluster?.center_longitude ?? cluster?.center?.lng ?? null;
+
+    return {
+      ...cluster,
+      count: shipmentCount,
+      totalWeight: totalWeightKg,
+      center: {
+        lat: Number.isFinite(Number(centerLat)) ? Number(centerLat) : null,
+        lng: Number.isFinite(Number(centerLng)) ? Number(centerLng) : null,
+      },
+    };
+  });
+
+  res.json({
+    success: true,
+    result: {
+      ...mlResult,
+      clusters: normalizedClusters,
+    },
+  });
 });
 
 // ── Delay risk for a DB shipment ──────────────────────────────────────────────
 const predictDelayRisk = asyncHandler(async (req, res) => {
   const shipment = await _getShipmentOrThrow(req.params.shipmentId, req.user);
-  const booking = shipment.bookings?.[0];
-  if (!booking) throw AppError.badRequest('Shipment has no booking yet');
+  const latestBooking = shipment.bookings?.[0] ?? null;
+  const truckType = latestBooking?.truck?.truckType || 'CONTAINER_20FT';
+  const queryDistanceKm = Number(req.query.distance_km);
+  const shipmentDistanceKm = _haversineKm(shipment.pickupLocation, shipment.destination);
+  const distanceKm =
+    (Number.isFinite(queryDistanceKm) && queryDistanceKm > 0 ? queryDistanceKm : null) ||
+    shipmentDistanceKm ||
+    latestBooking?.distanceKm ||
+    1;
 
-  const result = await mlService.predictDelayRisk({
-    distance_km: booking.distanceKm || 0,
-    weight_kg: shipment.weightKg,
-    truck_type: booking.truck?.truckType || 'CONTAINER_20FT',
-    weather_condition: req.query.weather || 'CLEAR',
-    traffic_condition: req.query.traffic || 'MODERATE',
-    time_of_day: req.query.time_of_day || 'AFTERNOON',
-  }, req.requestId);
+  let result;
+  try {
+    result = await mlService.predictDelayRisk({
+      distance_km: distanceKm,
+      weight_kg: shipment.weightKg,
+      truck_type: truckType,
+      weather_condition: req.query.weather || 'CLEAR',
+      traffic_condition: req.query.traffic || 'MODERATE',
+      time_of_day: req.query.time_of_day || 'AFTERNOON',
+    }, req.requestId);
+  } catch (err) {
+    logger.warn(`predictDelayRisk ML call failed: ${err.message}`);
+    return res.status(503).json({
+      success: false,
+      code: 'ML_UNAVAILABLE',
+      message: 'Delay risk prediction requires the ML service to be available.',
+    });
+  }
 
   await prisma.$transaction([
     prisma.prediction.deleteMany({ where: { shipmentId: shipment.id, type: 'DELAY_RISK_PERCENT' } }),
@@ -159,10 +250,17 @@ const predictDelayRisk = asyncHandler(async (req, res) => {
 // ── Fuel estimate ─────────────────────────────────────────────────────────────
 const estimateFuel = asyncHandler(async (req, res) => {
   const { distance_km, weight_kg, truck_type } = req.query;
-  const result = await mlService.estimateFuel(
+  const raw = await mlService.estimateFuel(
     { distance_km: +distance_km, weight_kg: +weight_kg, truck_type },
     req.requestId,
   );
+  const result = {
+    ...raw,
+    estimated_liters: raw?.estimated_liters ?? raw?.fuel_liters ?? raw?.fuelLiters ?? 0,
+    estimated_cost_inr: raw?.estimated_cost_inr ?? raw?.estimated_cost ?? raw?.cost_inr ?? raw?.costInr ?? raw?.cost ?? 0,
+    co2_kg: raw?.co2_kg ?? raw?.co2_emissions_kg ?? raw?.co2Kg ?? 0,
+    consumption_per_100km: raw?.consumption_per_100km ?? raw?.consumptionPer100km ?? null,
+  };
   res.json({ success: true, result });
 });
 

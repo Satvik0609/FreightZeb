@@ -322,27 +322,28 @@ User ──< Notification
 
 ## 5. Environment Variables
 
-Copy `backend/backend/backend/.env.example` to `.env`:
+The `.env` file is already configured in `backend/.env`.  
+Key variables:
 
 ```env
 # ── Required ──────────────────────────────────────────────────────────────────
-DATABASE_URL="postgresql://user:pass@host:5432/freightzen"
-JWT_SECRET="<min 32 characters>"
+DATABASE_URL=postgresql://...neon.tech/neondb?sslmode=require  # Neon cloud DB (already set)
+JWT_SECRET="<min 32 characters>"                               # Already set
 
-# ── Optional (defaults shown) ─────────────────────────────────────────────────
+# ── Server ────────────────────────────────────────────────────────────────────
 PORT=5000
 NODE_ENV=development
-JWT_EXPIRES_IN=7d
-FRONTEND_URL=http://localhost:3000
-ML_SERVICE_URL=http://localhost:8000   # ← URL of the Python FastAPI service
+FRONTEND_URL=http://localhost:5173   # Vite dev server
 
-# ── Email (SMTP) ──────────────────────────────────────────────────────────────
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password
-SMTP_FROM=noreply@freightzen.com
+# ── ML Service ────────────────────────────────────────────────────────────────
+ML_SERVICE_URL=http://localhost:8000
+ML_SERVICE_API_KEY=dev-ml-service-key
+ML_TIMEOUT_MS=10000
+
+# ── Email (optional — leave blank to skip) ────────────────────────────────────
+SMTP_HOST=
+SMTP_USER=
+SMTP_PASS=
 ```
 
 The server **will not start** if `DATABASE_URL` or `JWT_SECRET` are missing.  
@@ -352,44 +353,65 @@ The server **will not start** if `DATABASE_URL` or `JWT_SECRET` are missing.
 
 ## 6. Running the Project
 
-### Option A — Local (two terminals)
+> **Full setup guide with troubleshooting:** See [`SETUP.md`](./SETUP.md)
 
-**Terminal 1 — ML Service (Python)**
-```bash
-cd ml/ml-service
+### Option A — One-Click (Windows PowerShell)
 
-python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # Mac/Linux
-
-pip install -r requirements.txt
-
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```powershell
+# From the project root:
+.\start.ps1
 ```
-→ http://localhost:8000  
-→ Interactive docs: http://localhost:8000/docs
 
-**Terminal 2 — Backend (Node.js)**
-```bash
-cd backend/backend/backend
+Opens 3 terminal windows automatically (Backend, ML Service, Frontend).  
+Wait ~20 seconds, then open `http://localhost:5173`.
 
-cp .env.example .env          # fill in DATABASE_URL and JWT_SECRET
+### Option B — Manual (3 terminals)
 
+**Terminal 1 — Backend**
+```powershell
+cd backend
 npm install
-npx prisma generate
-npx prisma db push            # creates tables
-node prisma/seed.js           # optional: seed demo data
-npm run dev
+npm start
 ```
 → http://localhost:5000
 
-### Option B — Docker (one command)
+**Terminal 2 — ML Service**
+```powershell
+cd ml\service
+pip install -r requirements.txt
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+→ http://localhost:8000 | Swagger: http://localhost:8000/docs
+
+**Terminal 3 — Frontend**
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+→ http://localhost:5173
+
+### Login Credentials (demo data)
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | admin@freightzen.in | Admin@1234 |
+| Warehouse | ops@bharat-logistics.in | Warehouse@1234 |
+| Dealer | fleet@rajesh-transport.in | Dealer@1234 |
+
+### Option C — Docker (one command)
 ```bash
-# from freightzen/ root
+# from project root
 docker-compose up --build
 ```
 
-Both services start together. ML service is health-checked before the backend starts.
+Both backend + ML start together. ML service is health-checked before backend starts.
+
+> **Windows EPERM error?** If `npm start` fails with `EPERM: operation not permitted`:
+> ```powershell
+> taskkill /F /IM node.exe
+> npm start
+> ```
 
 ---
 

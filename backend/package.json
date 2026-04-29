@@ -16,6 +16,8 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "node prisma/seed.js",
     "setup:dev": "npm install && npx prisma generate && npx prisma db push && node prisma/seed.js",
+    "prisma:fix": "taskkill /F /IM node.exe 2>nul; timeout /t 2 /nobreak > nul; rmdir /s /q node_modules\\.prisma 2>nul; npx prisma generate",
+    "seed": "node prisma/seed.js",
     "docker:build": "docker build -t freightzeb-api .",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",

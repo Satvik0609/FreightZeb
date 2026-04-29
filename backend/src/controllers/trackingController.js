@@ -84,14 +84,18 @@ async function pushLocation(req, res, next) {
 
         // Broadcast to all subscribers of this booking
         const io = req.app.get('io');
-        io.to(`booking:${bookingId}`).emit('tracking:update', {
+        const payload = {
             bookingId,
             truckId: booking.truckId,
             latitude,
             longitude,
             status,
             timestamp: log.timestamp,
-        });
+        };
+        io.to(`booking:${bookingId}`).emit('tracking:update', payload);
+        io.to(`truck:${booking.truckId}`).emit('tracking:update', payload);
+        io.to(`user:${booking.warehouseId}`).emit('tracking:update', payload);
+        io.to(`user:${booking.dealerId}`).emit('tracking:update', payload);
 
         res.json({ success: true, log });
     } catch (err) {
