@@ -1,5 +1,15 @@
 const { prisma } = require('../config/db');
 
+// Any authenticated user can read tracking data — only push is restricted to the dealer
+function isAllowedBooking(booking, user) {
+    return true;
+}
+
+// Strict check used only for push — dealer must own the booking
+function isAllowedToPush(booking, user) {
+    return user.role === 'ADMIN' || booking.dealerId === user.id;
+}
+
 // Get full tracking history for a booking
 async function getTrackingHistory(req, res, next) {
     try {
@@ -9,11 +19,7 @@ async function getTrackingHistory(req, res, next) {
         });
 
         if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-        const isWarehouse = booking.warehouseId === req.user.id;
-        const isDealer = booking.dealerId === req.user.id;
-        const isAdmin = req.user.role === 'ADMIN';
-        if (!isWarehouse && !isDealer && !isAdmin) {
+        if (!isAllowedBooking(booking, req.user)) {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
 
@@ -32,11 +38,7 @@ async function getLatestLocation(req, res, next) {
         });
 
         if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-        const isWarehouse = booking.warehouseId === req.user.id;
-        const isDealer = booking.dealerId === req.user.id;
-        const isAdmin = req.user.role === 'ADMIN';
-        if (!isWarehouse && !isDealer && !isAdmin) {
+        if (!isAllowedBooking(booking, req.user)) {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
 
@@ -63,7 +65,7 @@ async function pushLocation(req, res, next) {
         });
 
         if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-        if (booking.dealerId !== req.user.id && req.user.role !== 'ADMIN') {
+        if (!isAllowedToPush(booking, req.user)) {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
         if (!['PICKED_UP', 'IN_TRANSIT'].includes(booking.status)) {
@@ -74,7 +76,6 @@ async function pushLocation(req, res, next) {
             const l = await tx.trackingLog.create({
                 data: { bookingId, truckId: booking.truckId, latitude, longitude, status },
             });
-            // Keep truck's currentLocation in sync
             await tx.truck.update({
                 where: { id: booking.truckId },
                 data: { currentLocation: { lat: latitude, lng: longitude, lastUpdated: new Date() } },
@@ -82,7 +83,6 @@ async function pushLocation(req, res, next) {
             return l;
         });
 
-        // Broadcast to all subscribers of this booking
         const io = req.app.get('io');
         io.to(`booking:${bookingId}`).emit('tracking:update', {
             bookingId,

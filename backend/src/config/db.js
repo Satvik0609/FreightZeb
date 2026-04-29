@@ -8,7 +8,6 @@ const prisma = new PrismaClient({
   errorFormat: 'minimal',
 });
 
-// Log slow queries in development
 if (process.env.NODE_ENV === 'development') {
   prisma.$on('query', (e) => {
     if (e.duration > 500) {

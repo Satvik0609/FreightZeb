@@ -176,6 +176,11 @@ async function canJoinRoom(socket, room) {
     return true;
   }
 
+  // CARGO_DEALER joins warehouse room under their own userId
+  if (type === 'warehouse' && socket.user.role === 'CARGO_DEALER' && id === socket.user.id) {
+    return true;
+  }
+
   if (type === 'booking') {
     const booking = await prisma.booking.findUnique({
       where: { id },

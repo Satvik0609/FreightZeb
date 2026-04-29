@@ -4,7 +4,7 @@ const registerRules = [
     body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
     body('name').trim().notEmpty().withMessage('Name required'),
-    body('role').optional().isIn(['WAREHOUSE', 'DEALER']).withMessage('Invalid role'),
+    body('role').optional().isIn(['WAREHOUSE', 'DEALER', 'CARGO_DEALER']).withMessage('Invalid role'),
     body('phone').optional().isMobilePhone().withMessage('Invalid phone number'),
     body('company').optional().trim(),
 ];

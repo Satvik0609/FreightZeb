@@ -3,31 +3,31 @@
  * Pure business logic. No req/res. Testable in isolation.
  */
 
-const bookingRepo      = require('../repositories/bookingRepository');
+const bookingRepo = require('../repositories/bookingRepository');
 const { calculateRoute } = require('./routeService');
-const pricingService   = require('./pricingService');
-const { AppError }     = require('../helpers/errors');
-const { prisma }       = require('../config/db');
-const logger           = require('../config/logger');
+const pricingService = require('./pricingService');
+const { AppError } = require('../helpers/errors');
+const { prisma } = require('../config/db');
+const logger = require('../config/logger');
 
 // ── State machine ─────────────────────────────────────────────────────────────
 const TRANSITIONS = {
-  REQUESTED:  ['APPROVED', 'REJECTED', 'CANCELLED'],
-  APPROVED:   ['ASSIGNED', 'CANCELLED'],
-  ASSIGNED:   ['PICKED_UP', 'CANCELLED'],
-  PICKED_UP:  ['IN_TRANSIT'],
+  REQUESTED: ['APPROVED', 'REJECTED', 'CANCELLED'],
+  APPROVED: ['ASSIGNED', 'CANCELLED'],
+  ASSIGNED: ['PICKED_UP', 'CANCELLED'],
+  PICKED_UP: ['IN_TRANSIT'],
   IN_TRANSIT: ['DELIVERED'],
 };
 
 // Who can trigger each status change
 const ROLE_GATES = {
-  APPROVED:   ['DEALER', 'ADMIN'],
-  REJECTED:   ['DEALER', 'ADMIN'],
-  ASSIGNED:   ['DEALER', 'ADMIN'],
-  CANCELLED:  ['WAREHOUSE', 'ADMIN'],
-  PICKED_UP:  ['DEALER', 'ADMIN'],
-  IN_TRANSIT: ['DEALER', 'ADMIN'],
-  DELIVERED:  ['DEALER', 'ADMIN'],
+  APPROVED: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  REJECTED: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  ASSIGNED: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  CANCELLED: ['WAREHOUSE', 'CARGO_DEALER', 'ADMIN'],
+  PICKED_UP: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  IN_TRANSIT: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  DELIVERED: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
 };
 
 /**
@@ -35,7 +35,7 @@ const ROLE_GATES = {
  * @param {{ shipmentId, truckId, warehouseId, notes, optimScore }} params
  * @returns {Booking}
  */
-async function create({ shipmentId, truckId, warehouseId, notes, optimScore }) {
+async function create({ shipmentId, truckId, warehouseId, notes, optimScore, dealerInitiated = false, actingDealerId = null }) {
   // Existence checks (outside tx for speed; tx re-checks atomically)
   const [shipment, truck] = await Promise.all([
     prisma.shipment.findUnique({ where: { id: shipmentId }, select: { warehouseId: true, pickupLocation: true, destination: true, weightKg: true } }),
@@ -46,10 +46,16 @@ async function create({ shipmentId, truckId, warehouseId, notes, optimScore }) {
   ]);
 
   if (!shipment) throw AppError.notFound('Shipment not found');
-  if (!truck)    throw AppError.notFound('Truck not found');
+  if (!truck) throw AppError.notFound('Truck not found');
 
-  if (shipment.warehouseId !== warehouseId) {
-    throw AppError.forbidden('You do not own this shipment');
+  // Dealer-initiated: use shipment's warehouseId, verify truck belongs to dealer
+  if (dealerInitiated) {
+    if (truck.dealerId !== actingDealerId) throw AppError.forbidden('You do not own this truck');
+    warehouseId = shipment.warehouseId;
+  } else {
+    if (shipment.warehouseId !== warehouseId) {
+      throw AppError.forbidden('You do not own this shipment');
+    }
   }
 
   const { distanceKm, durationMin } = calculateRoute(shipment.pickupLocation, shipment.destination);
@@ -69,7 +75,7 @@ async function create({ shipmentId, truckId, warehouseId, notes, optimScore }) {
     distanceKm,
     estimatedEta,
     pricing,
-    notes:      notes || null,
+    notes: notes || null,
     optimScore: optimScore || null,
   });
 
@@ -102,6 +108,13 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
     throw AppError.forbidden(`Role ${userRole} cannot set status ${newStatus}`);
   }
 
+  const isAdmin = userRole === 'ADMIN';
+  const isDealerOwner = ['DEALER', 'CARGO_DEALER'].includes(userRole) && booking.dealerId === userId;
+  const isWarehouseOwner = ['WAREHOUSE', 'CARGO_DEALER'].includes(userRole) && booking.warehouseId === userId;
+  if (!isAdmin && !isDealerOwner && !isWarehouseOwner) {
+    throw AppError.forbidden('You do not own this booking');
+  }
+
   // State machine
   const allowed = TRANSITIONS[booking.status] || [];
   if (!allowed.includes(newStatus)) {
@@ -110,8 +123,8 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
 
   const data = { status: newStatus };
   if (notes) data.notes = notes;
-  if (newStatus === 'PICKED_UP')  data.pickedUpAt  = new Date();
-  if (newStatus === 'DELIVERED')  data.deliveredAt = new Date();
+  if (newStatus === 'PICKED_UP') data.pickedUpAt = new Date();
+  if (newStatus === 'DELIVERED') data.deliveredAt = new Date();
 
   let shipmentStatusChange = null;
   const updated = await prisma.$transaction(async (tx) => {
@@ -258,8 +271,8 @@ async function getOne(bookingId, user) {
   if (!booking) throw AppError.notFound('Booking not found');
 
   const isWarehouse = booking.warehouseId === user.id;
-  const isDealer    = booking.dealerId    === user.id;
-  const isAdmin     = user.role           === 'ADMIN';
+  const isDealer = booking.dealerId === user.id;
+  const isAdmin = user.role === 'ADMIN';
 
   if (!isWarehouse && !isDealer && !isAdmin) throw AppError.forbidden();
   return booking;

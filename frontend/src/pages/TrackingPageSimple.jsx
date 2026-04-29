@@ -1,11 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { GoogleMap, LoadScript, Marker, Polyline, InfoWindow } from '@react-google-maps/api';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/axios';
-import { getSocket } from '../lib/socket';
-import { useAuthStore } from '../store/authStore';
-import { MapPin, Navigation, Clock, Package, Truck, AlertCircle, Radio } from 'lucide-react';
+import { MapPin, Clock, Package, Truck, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
@@ -28,22 +26,18 @@ const statusColors = {
     CANCELLED: '#ef4444',
 };
 
-export default function TrackingPage() {
+export default function TrackingPageSimple() {
     const [searchParams, setSearchParams] = useSearchParams();
-    const [bookingId, setBookingId] = useState((searchParams.get('bookingId') || '').trim());
+    const [bookingId, setBookingId] = useState(searchParams.get('bookingId') || '');
     const [selectedMarker, setSelectedMarker] = useState(null);
-    const [mapCenter, setMapCenter] = useState(defaultCenter);
-    const [mapZoom, setMapZoom] = useState(6);
-    const [isLive, setIsLive] = useState(false);
-    const mapRef = useRef(null);
-    const queryClient = useQueryClient();
-    const token = useAuthStore((s) => s.token);
+    const [map, setMap] = useState(null);
 
     const { data: trackingData, isLoading, error, refetch } = useQuery({
         queryKey: ['tracking', bookingId],
         queryFn: async () => {
             if (!bookingId) return null;
-            const res = await api.get(`/tracking/${bookingId.trim()}/history`);
+            const res = await api.get(`/tracking/${bookingId}/history`);
+            console.log('Tracking data received:', res.data);
             return res.data;
         },
         enabled: !!bookingId,
@@ -58,93 +52,25 @@ export default function TrackingPage() {
         }
     };
 
+    // Center map when data loads
     useEffect(() => {
-        if (trackingData?.trackingLogs?.length > 0) {
-            const latest = trackingData.trackingLogs[trackingData.trackingLogs.length - 1];
-            const center = { lat: latest.latitude, lng: latest.longitude };
-            setMapCenter(center);
-            setMapZoom(12);
-            // Pan the map if it's already mounted
-            if (mapRef.current) {
-                mapRef.current.panTo(center);
-                mapRef.current.setZoom(12);
-            }
-        }
-    }, [trackingData]);
-
-    // Real-time socket tracking
-    useEffect(() => {
-        if (!bookingId || !token) return;
-
-        const socket = getSocket(token);
-
-        if (!socket.connected) {
-            socket.connect();
-        }
-
-        const room = `booking:${bookingId}`;
-        socket.emit('join', room);
-        setIsLive(false);
-
-        socket.on('connect', () => {
-            socket.emit('join', room);
-        });
-
-        socket.on('tracking:update', (update) => {
-            setIsLive(true);
-            const newLog = {
-                id: update.timestamp,
-                bookingId: update.bookingId,
-                truckId: update.truckId,
-                latitude: update.latitude,
-                longitude: update.longitude,
-                status: update.status,
-                timestamp: update.timestamp,
-            };
-
-            // Append the new log into the cached query data immediately
-            queryClient.setQueryData(['tracking', bookingId], (old) => {
-                if (!old) return old;
-                return {
-                    ...old,
-                    status: update.status,
-                    trackingLogs: [...old.trackingLogs, newLog],
-                };
+        if (map && trackingData?.trackingLogs?.length > 0) {
+            const bounds = new window.google.maps.LatLngBounds();
+            trackingData.trackingLogs.forEach(log => {
+                bounds.extend({ lat: log.latitude, lng: log.longitude });
             });
-
-            // Pan map to new position
-            const center = { lat: update.latitude, lng: update.longitude };
-            setMapCenter(center);
-            if (mapRef.current) {
-                mapRef.current.panTo(center);
-            }
-        });
-
-        return () => {
-            socket.emit('leave', room);
-            socket.off('connect');
-            socket.off('tracking:update');
-            setIsLive(false);
-        };
-    }, [bookingId, token, queryClient]);
-
-    const getStatusIcon = (status) => {
-        switch (status) {
-            case 'PICKED_UP':
-                return <Package className="w-4 h-4" />;
-            case 'IN_TRANSIT':
-                return <Truck className="w-4 h-4" />;
-            case 'DELIVERED':
-                return <MapPin className="w-4 h-4" />;
-            default:
-                return <Navigation className="w-4 h-4" />;
+            map.fitBounds(bounds);
+            console.log('Map bounds set for', trackingData.trackingLogs.length, 'points');
         }
-    };
+    }, [map, trackingData]);
 
     const pathCoordinates = trackingData?.trackingLogs?.map(log => ({
         lat: log.latitude,
         lng: log.longitude,
     })) || [];
+
+    console.log('Path coordinates:', pathCoordinates);
+    console.log('Tracking logs:', trackingData?.trackingLogs?.length);
 
     return (
         <div className="p-6 max-w-7xl mx-auto">
@@ -159,7 +85,7 @@ export default function TrackingPage() {
                         type="text"
                         value={bookingId}
                         onChange={(e) => setBookingId(e.target.value)}
-                        placeholder="Enter Booking ID (e.g., BK-001)"
+                        placeholder="Enter Booking ID"
                         className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                     <button
@@ -175,7 +101,7 @@ export default function TrackingPage() {
                 <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
                     <div>
-                        <h3 className="font-semibold text-red-900">Error Loading Tracking Data</h3>
+                        <h3 className="font-semibold text-red-900">Error</h3>
                         <p className="text-red-700 text-sm mt-1">{error.message}</p>
                     </div>
                 </div>
@@ -184,14 +110,14 @@ export default function TrackingPage() {
             {isLoading && (
                 <div className="text-center py-12">
                     <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-                    <p className="mt-4 text-gray-600">Loading tracking information...</p>
+                    <p className="mt-4 text-gray-600">Loading...</p>
                 </div>
             )}
 
             {trackingData && !isLoading && (
                 <div className="space-y-6">
                     <div className="bg-white rounded-lg shadow-md p-6">
-                        <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center justify-between">
                             <div>
                                 <h2 className="text-xl font-semibold text-gray-900">Booking: {trackingData.bookingId}</h2>
                                 <div className="flex items-center gap-2 mt-2">
@@ -204,12 +130,6 @@ export default function TrackingPage() {
                                     <span className="text-gray-500 text-sm">
                                         {trackingData.trackingLogs?.length || 0} location updates
                                     </span>
-                                    {isLive && (
-                                        <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
-                                            <Radio className="w-3 h-3 animate-pulse" />
-                                            LIVE
-                                        </span>
-                                    )}
                                 </div>
                             </div>
                             <button
@@ -225,14 +145,15 @@ export default function TrackingPage() {
                         <LoadScript googleMapsApiKey={GOOGLE_MAPS_API_KEY}>
                             <GoogleMap
                                 mapContainerStyle={mapContainerStyle}
-                                center={mapCenter}
-                                zoom={mapZoom}
-                                onLoad={(map) => { mapRef.current = map; }}
+                                center={defaultCenter}
+                                zoom={6}
+                                onLoad={setMap}
                                 options={{
                                     streetViewControl: false,
                                     mapTypeControl: true,
                                 }}
                             >
+                                {/* Route line */}
                                 {pathCoordinates.length > 1 && (
                                     <Polyline
                                         path={pathCoordinates}
@@ -244,46 +165,36 @@ export default function TrackingPage() {
                                     />
                                 )}
 
+                                {/* Markers */}
                                 {trackingData.trackingLogs?.map((log, index) => {
-                                    const isLatest = index === trackingData.trackingLogs.length - 1;
-                                    const isFirst = index === 0;
-                                    const iconUrl = isLatest
-                                        ? 'https://maps.google.com/mapfiles/ms/icons/red-dot.png'
-                                        : isFirst
-                                            ? 'https://maps.google.com/mapfiles/ms/icons/green-dot.png'
-                                            : 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png';
-
+                                    console.log('Rendering marker', index, 'at', log.latitude, log.longitude);
                                     return (
                                         <Marker
                                             key={log.id}
                                             position={{ lat: log.latitude, lng: log.longitude }}
                                             onClick={() => setSelectedMarker(log)}
-                                            icon={iconUrl}
-                                            zIndex={isLatest ? 999 : index}
+                                            label={String(index + 1)}
                                         />
                                     );
                                 })}
 
+                                {/* Info window */}
                                 {selectedMarker && (
                                     <InfoWindow
                                         position={{ lat: selectedMarker.latitude, lng: selectedMarker.longitude }}
                                         onCloseClick={() => setSelectedMarker(null)}
                                     >
                                         <div className="p-2">
-                                            <div className="flex items-center gap-2 mb-2">
-                                                {getStatusIcon(selectedMarker.status)}
-                                                <span className="font-semibold">{selectedMarker.status.replace('_', ' ')}</span>
-                                            </div>
+                                            <div className="font-semibold mb-2">{selectedMarker.status.replace('_', ' ')}</div>
                                             <p className="text-sm text-gray-600 mb-1">
                                                 <Clock className="w-3 h-3 inline mr-1" />
                                                 {format(new Date(selectedMarker.timestamp), 'MMM dd, yyyy HH:mm')}
                                             </p>
                                             <p className="text-xs text-gray-500">
-                                                Lat: {selectedMarker.latitude.toFixed(6)}, Lng: {selectedMarker.longitude.toFixed(6)}
+                                                {selectedMarker.latitude.toFixed(6)}, {selectedMarker.longitude.toFixed(6)}
                                             </p>
                                             {selectedMarker.truckId && (
                                                 <p className="text-xs text-gray-500 mt-1">
-                                                    <Truck className="w-3 h-3 inline mr-1" />
                                                     Truck: {selectedMarker.truckId}
                                                 </p>
                                             )}
@@ -294,6 +205,7 @@ export default function TrackingPage() {
                         </LoadScript>
                     </div>
 
+                    {/* Timeline */}
                     <div className="bg-white rounded-lg shadow-md p-6">
                         <h3 className="text-lg font-semibold text-gray-900 mb-4">Tracking History</h3>
                         <div className="space-y-4">
@@ -301,10 +213,10 @@ export default function TrackingPage() {
                                 <div key={log.id} className="flex gap-4">
                                     <div className="flex flex-col items-center">
                                         <div
-                                            className="w-10 h-10 rounded-full flex items-center justify-center text-white"
+                                            className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold"
                                             style={{ backgroundColor: statusColors[log.status] }}
                                         >
-                                            {getStatusIcon(log.status)}
+                                            {trackingData.trackingLogs.length - index}
                                         </div>
                                         {index < trackingData.trackingLogs.length - 1 && (
                                             <div className="w-0.5 h-full bg-gray-300 my-1"></div>
@@ -318,10 +230,10 @@ export default function TrackingPage() {
                                             </span>
                                         </div>
                                         <p className="text-sm text-gray-600">
-                                            Location: {log.latitude.toFixed(6)}, {log.longitude.toFixed(6)}
+                                            {log.latitude.toFixed(6)}, {log.longitude.toFixed(6)}
                                         </p>
                                         {log.truckId && (
-                                            <p className="text-sm text-gray-500 mt-1">Truck ID: {log.truckId}</p>
+                                            <p className="text-sm text-gray-500 mt-1">Truck: {log.truckId}</p>
                                         )}
                                     </div>
                                 </div>

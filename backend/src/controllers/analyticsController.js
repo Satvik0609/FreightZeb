@@ -54,7 +54,20 @@ function seriesFromRecords(records, { dateKey, valueKey, granularity }) {
 }
 
 function groupedStatusCounts(rows, labelKey = 'status') {
-  return Object.fromEntries(rows.map((row) => [row[labelKey], row._count._all]));
+  return Object.fromEntries(
+    rows.map((row) => {
+      const label = row[labelKey];
+      // Prisma v5 groupBy with _count: true returns _count as { _all: N }
+      // but some versions return it differently — handle both
+      let count = 0;
+      if (typeof row._count === 'number') {
+        count = row._count;
+      } else if (row._count && typeof row._count === 'object') {
+        count = row._count._all ?? Object.values(row._count)[0] ?? 0;
+      }
+      return [label, Number(count)];
+    })
+  );
 }
 
 async function getWarehouseAnalytics(req, res, next) {
@@ -68,7 +81,7 @@ async function getWarehouseAnalytics(req, res, next) {
       predictions,
     ] = await Promise.all([
       prisma.shipment.count({ where: { warehouseId } }),
-      prisma.shipment.groupBy({ by: ['status'], where: { warehouseId }, _count: true }),
+      prisma.shipment.groupBy({ by: ['status'], where: { warehouseId }, _count: { _all: true } }),
       prisma.booking.findMany({
         where: { warehouseId, status: 'DELIVERED' },
         select: { distanceKm: true, createdAt: true, deliveredAt: true },
@@ -179,8 +192,8 @@ async function getDealerAnalytics(req, res, next) {
       deliveredBookings,
     ] = await Promise.all([
       prisma.truck.count({ where: { dealerId } }),
-      prisma.truck.groupBy({ by: ['status'], where: { dealerId }, _count: true }),
-      prisma.booking.groupBy({ by: ['status'], where: { dealerId }, _count: true }),
+      prisma.truck.groupBy({ by: ['status'], where: { dealerId }, _count: { _all: true } }),
+      prisma.booking.groupBy({ by: ['status'], where: { dealerId }, _count: { _all: true } }),
       prisma.booking.findMany({
         where: { dealerId, status: 'DELIVERED' },
         select: { distanceKm: true, optimScore: true },
@@ -272,17 +285,18 @@ async function getAdminAnalytics(req, res, next) {
       recentBookings,
     ] = await Promise.all([
       prisma.user.count(),
-      prisma.user.groupBy({ by: ['role'], _count: true }),
+      prisma.user.groupBy({ by: ['role'], _count: { _all: true } }),
       prisma.shipment.count(),
-      prisma.shipment.groupBy({ by: ['status'], _count: true }),
+      prisma.shipment.groupBy({ by: ['status'], _count: { _all: true } }),
       prisma.truck.count(),
-      prisma.truck.groupBy({ by: ['status'], _count: true }),
+      prisma.truck.groupBy({ by: ['status'], _count: { _all: true } }),
       prisma.booking.count(),
-      prisma.booking.groupBy({ by: ['status'], _count: true }),
+      prisma.booking.groupBy({ by: ['status'], _count: { _all: true } }),
       prisma.booking.findMany({
         take: 10,
         orderBy: { createdAt: 'desc' },
         include: {
+          shipment: { select: { description: true } },
           warehouse: { select: { name: true, company: true } },
           dealer: { select: { name: true, company: true } },
           truck: { select: { registrationNo: true, truckType: true } },

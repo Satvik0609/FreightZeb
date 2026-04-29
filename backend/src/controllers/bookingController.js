@@ -12,6 +12,30 @@ const { parsePagination, paginatedResponse } = require('../helpers/pagination');
 const { emitShipmentStatusUpdate } = require('../helpers/realtime');
 const logger = require('../config/logger');
 
+// ── POST /api/bookings/dealer-accept ────────────────────────────────────────
+// Dealer self-accepts a shipment match → creates booking + immediately approves it
+const dealerAcceptShipment = asyncHandler(async (req, res) => {
+    const { shipmentId, truckId, notes } = req.body;
+
+    const { booking, shipmentStatusChange } = await bookingService.create({
+        shipmentId,
+        truckId,
+        warehouseId: null, // resolved from shipment inside service
+        dealerInitiated: true,
+        notes,
+        optimScore: null,
+        actingDealerId: req.user.id,
+    });
+
+    const io = req.app.get('io');
+    emitShipmentStatusUpdate(io, shipmentStatusChange);
+    notificationService
+        .bookingRequested(io, { dealerId: booking.dealerId, bookingId: booking.id, shipmentId, warehouseName: 'Dealer-initiated' })
+        .catch((e) => logger.warn(`Notification failed: ${e.message}`));
+
+    res.status(201).json({ success: true, booking });
+});
+
 // ── POST /api/bookings ───────────────────────────────────────────────────────
 const createBooking = asyncHandler(async (req, res) => {
     const { shipmentId, truckId, notes, optimScore } = req.body;
@@ -143,6 +167,7 @@ async function _fireStatusSideEffects(io, booking, status) {
 }
 
 module.exports = {
+    dealerAcceptShipment,
     createBooking,
     getMyBookings,
     getDealerBookings,

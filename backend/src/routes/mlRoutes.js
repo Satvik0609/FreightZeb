@@ -17,6 +17,8 @@ const {
   optimizeCargo,
   getMlHealth,
   getModelsInfo,
+  getTrainingData,
+  triggerRetrain,
 } = require('../controllers/mlController');
 
 const { protect } = require('../middleware/authMiddleware');
@@ -63,7 +65,12 @@ router.get('/predict-delay/:shipmentId', delayPredictionQueryRules, validate, pr
 router.get('/estimate-fuel', estimateFuelRules, validate, estimateFuel);
 
 // POST /api/ml/optimize-cargo
-// Body: { truck_capacity_kg, truck_capacity_m3, items: [...] }
 router.post('/optimize-cargo', optimizeCargoRules, validate, optimizeCargo);
+
+// GET  /api/ml/training-data  — exports real DB data for model training (ADMIN only)
+router.get('/training-data', getTrainingData);
+
+// POST /api/ml/retrain  — triggers full model retrain on real DB data (ADMIN only)
+router.post('/retrain', triggerRetrain);
 
 module.exports = router;

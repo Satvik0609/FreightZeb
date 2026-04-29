@@ -1,3 +1,13 @@
+function emitShipmentCreated(io, payload) {
+  if (!io || !payload?.shipmentId || !payload?.warehouseId) return;
+
+  io.to(`warehouse:${payload.warehouseId}`).emit('shipment:created', {
+    shipmentId: payload.shipmentId,
+    shipment: payload.shipment || null,
+    source: payload.source || 'backend',
+  });
+}
+
 function emitShipmentStatusUpdate(io, payload) {
   if (!io || !payload?.shipmentId || !payload?.warehouseId || !payload?.status) return;
 
@@ -19,12 +29,17 @@ function emitShipmentStatusUpdate(io, payload) {
 function emitShipmentPredictionsUpdated(io, payload) {
   if (!io || !payload?.shipmentId || !payload?.warehouseId) return;
 
-  io.to(`warehouse:${payload.warehouseId}`).emit('shipment:predictionsUpdated', {
+  const event = {
     shipmentId: payload.shipmentId,
     predictions: payload.predictions || [],
     source: payload.source || 'backend',
     trigger: payload.trigger || null,
-  });
+  };
+
+  // Notify warehouse owner
+  io.to(`warehouse:${payload.warehouseId}`).emit('shipment:predictionsUpdated', event);
+  // Also broadcast to anyone watching this shipment (dealers, admins)
+  io.to(`shipment:${payload.shipmentId}`).emit('shipment:predictionsUpdated', event);
 }
 
 function emitShipmentOptimized(io, payload) {
@@ -38,6 +53,7 @@ function emitShipmentOptimized(io, payload) {
 }
 
 module.exports = {
+  emitShipmentCreated,
   emitShipmentStatusUpdate,
   emitShipmentPredictionsUpdated,
   emitShipmentOptimized,

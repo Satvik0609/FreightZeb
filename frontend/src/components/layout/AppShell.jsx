@@ -14,14 +14,14 @@ import toast from "react-hot-toast";
 
 const baseNav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/shipments", label: "Shipments", icon: Box, roles: ["ADMIN", "WAREHOUSE"] },
-  { to: "/trucks", label: "Trucks", icon: Truck },
+  { to: "/shipments", label: "Shipments", icon: Box, roles: ["ADMIN", "WAREHOUSE", "CARGO_DEALER"] },
+  { to: "/trucks", label: "Trucks", icon: Truck, roles: ["ADMIN", "DEALER", "CARGO_DEALER"] },
   { to: "/bookings", label: "Bookings", icon: FileText },
   { to: "/tracking", label: "Tracking", icon: Truck },
   { to: "/analytics", label: "Analytics", icon: ChartColumnBig },
   { to: "/ml-insights", label: "ML Insights", icon: BrainCircuit },
   { to: "/notifications", label: "Notifications", icon: Bell },
-  { to: "/invoices", label: "Invoices", icon: FileText, roles: ["ADMIN", "WAREHOUSE"] },
+  { to: "/invoices", label: "Invoices", icon: FileText, roles: ["ADMIN", "WAREHOUSE", "CARGO_DEALER"] },
   { to: "/admin", label: "Admin", icon: Users, roles: ["ADMIN"] },
 ];
 
@@ -54,6 +54,10 @@ export function AppShell() {
     socket.connect();
     socket.emit("join", `user:${user.id}`);
     socket.emit("join", `${user.role.toLowerCase()}:${user.id}`);
+    // CARGO_DEALER uses warehouse room for shipment events
+    if (user.role === "CARGO_DEALER") {
+      socket.emit("join", `warehouse:${user.id}`);
+    }
 
     const handleNotification = (payload) => {
       toast(payload?.title || "New notification");
@@ -97,7 +101,9 @@ export function AppShell() {
               {sidebarOpen ? (
                 <div>
                   <div className="font-semibold tracking-tight">FreightZen</div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">{user?.role}</div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    {{ ADMIN: "Admin", WAREHOUSE: "Warehouse Manager", DEALER: "Truck Dealer", CARGO_DEALER: "Cargo Dealer" }[user?.role] || user?.role}
+                  </div>
                 </div>
               ) : null}
             </Link>

@@ -77,90 +77,103 @@ class DeliveryPredictorV2:
         logger.info(f"DeliveryPredictorV2 ready - R²: {self.r2_score:.4f}, MAE: {self.mae:.2f}h, RMSE: {self.rmse:.2f}h")
     
     def _load_real_data(self):
-        """Load real delivery dataset if available."""
-        # Try Food Delivery dataset
-        data_path = 'data/food_delivery.csv'
-        
-        if os.path.exists(data_path):
-            logger.info("Loading real food delivery dataset...")
-            df = pd.read_csv(data_path)
-            
-            processed_data = []
+        """Load best available dataset for delivery time prediction.
+        Only use DataCo if it has clean shipping day data — otherwise return None
+        and let the synthetic generator handle it (it's well-calibrated for Indian logistics).
+        """
+        dataco = 'data/DataCoSupplyChainDataset.csv'
+        if not os.path.exists(dataco):
+            return None
+
+        logger.info("Loading DataCo supply chain dataset (real shipping days)...")
+        try:
+            df = pd.read_csv(dataco, encoding='latin-1')
+            df['days_real'] = pd.to_numeric(df.get('Days for shipping (real)', pd.Series(dtype=float)), errors='coerce')
+            df = df.dropna(subset=['days_real'])
+            df = df[df['days_real'].between(1, 30)]  # sanity filter
+
+            if len(df) < 500:
+                return None
+
+            traffic_map = {'Same Day': 'HEAVY', 'First Class': 'LIGHT',
+                           'Second Class': 'MODERATE', 'Standard Class': 'MODERATE'}
+            indian_distances = [148,281,346,500,524,570,627,660,711,836,944,980,984,1415,1472,1495,1568,2180]
+            rng = np.random.default_rng(42)
+            processed = []
             for _, row in df.iterrows():
-                # Map dataset columns
-                distance = row.get('distance', row.get('Distance', np.random.uniform(1, 50)))
-                delivery_time = row.get('time_taken', row.get('Time_taken(min)', np.random.uniform(15, 60))) / 60
-                
-                processed_data.append({
-                    'weight_kg': np.random.uniform(500, 5000),
-                    'distance_km': distance,
-                    'truck_type': np.random.choice(self.truck_types),
-                    'traffic_condition': np.random.choice(self.traffic_conditions),
-                    'weather_condition': np.random.choice(self.weather_conditions),
-                    'delivery_hours': delivery_time
+                # Convert real shipping days to hours using realistic Indian logistics speed
+                # Average 400 km/day on Indian highways + loading/unloading overhead
+                days = float(row['days_real'])
+                dist = float(rng.choice(indian_distances))
+                # Delivery hours = travel time + fixed overhead (loading, rest, customs)
+                travel_hours = dist / 55.0  # avg 55 km/h effective speed
+                overhead_hours = days * 1.5  # rest stops, loading, delays
+                delivery_hours = max(travel_hours + overhead_hours, dist / 80.0)
+                if delivery_hours > 200:
+                    continue
+                shipping_mode = str(row.get('Shipping Mode', 'Standard Class'))
+                processed.append({
+                    'weight_kg': min(float(row.get('Order Item Quantity', 10)) * 180, 25000),
+                    'distance_km': dist,
+                    'truck_type': rng.choice(self.truck_types),
+                    'traffic_condition': traffic_map.get(shipping_mode, 'MODERATE'),
+                    'weather_condition': rng.choice(self.weather_conditions, p=[0.45,0.25,0.15,0.04,0.07,0.04]),
+                    'delivery_hours': delivery_hours,
                 })
-            
-            logger.info(f"Loaded {len(processed_data)} real delivery samples")
-            return pd.DataFrame(processed_data)
-        
-        # Try DataCo dataset
-        data_path2 = 'data/DataCoSupplyChainDataset.csv'
-        if os.path.exists(data_path2):
-            logger.info("Loading DataCo supply chain dataset...")
-            df = pd.read_csv(data_path2)
-            
-            processed_data = []
-            for _, row in df.iterrows():
-                days_for_shipment = row.get('Days for shipment (scheduled)', 3)
-                delivery_hours = days_for_shipment * 24
-                
-                processed_data.append({
-                    'weight_kg': row.get('Product Weight', np.random.uniform(100, 20000)),
-                    'distance_km': row.get('Distance', np.random.uniform(50, 1500)),
-                    'truck_type': np.random.choice(self.truck_types),
-                    'traffic_condition': np.random.choice(self.traffic_conditions, p=[0.3, 0.4, 0.2, 0.1]),
-                    'weather_condition': np.random.choice(self.weather_conditions, p=[0.4, 0.25, 0.15, 0.05, 0.1, 0.05]),
-                    'delivery_hours': delivery_hours
-                })
-            
-            logger.info(f"Loaded {len(processed_data)} samples from DataCo")
-            return pd.DataFrame(processed_data)
-        
-        return None
+            logger.info("Loaded %d clean DataCo delivery records", len(processed))
+            return pd.DataFrame(processed) if len(processed) >= 500 else None
+        except Exception as exc:
+            logger.warning("DataCo load failed: %s", exc)
+            return None
     
     def _generate_synthetic_data(self, n_samples=20000):
-        """Generate high-quality synthetic delivery data."""
+        """Generate high-quality synthetic delivery data based on Indian logistics."""
         np.random.seed(42)
         data = []
-        
+
+        # Realistic average speeds on Indian highways (km/h)
         base_speeds = {
-            'SMALL_VAN': 65, 'CONTAINER_20FT': 55, 'CONTAINER_32FT': 50,
-            'FLATBED_TRAILER': 52, 'REEFER': 57
+            'SMALL_VAN': 70, 'CONTAINER_20FT': 60, 'CONTAINER_32FT': 55,
+            'FLATBED_TRAILER': 55, 'REEFER': 60
         }
-        
-        traffic_impact = {'LIGHT': 1.0, 'MODERATE': 1.25, 'HEAVY': 1.7, 'SEVERE': 2.3}
-        weather_impact = {'CLEAR': 1.0, 'CLOUDY': 1.05, 'RAIN': 1.3, 
-                         'STORM': 1.7, 'FOG': 1.5, 'SNOW': 1.9}
-        
+        # Multipliers on travel time (>1 = slower)
+        traffic_impact = {'LIGHT': 1.0, 'MODERATE': 1.15, 'HEAVY': 1.40, 'SEVERE': 1.80}
+        weather_impact = {'CLEAR': 1.0, 'CLOUDY': 1.03, 'RAIN': 1.20,
+                         'STORM': 1.50, 'FOG': 1.35, 'SNOW': 1.60}
+
+        # Realistic Indian city-pair distances (km)
+        indian_distances = [
+            148, 281, 346, 500, 524, 570, 627, 660, 711, 836,
+            944, 980, 984, 1415, 1472, 1495, 1568, 2180,
+            200, 350, 450, 750, 900, 1100, 1300, 1600,
+        ]
+
         for _ in range(n_samples):
             truck_type = np.random.choice(self.truck_types)
-            traffic = np.random.choice(self.traffic_conditions, p=[0.3, 0.4, 0.2, 0.1])
-            weather = np.random.choice(self.weather_conditions, p=[0.4, 0.25, 0.15, 0.05, 0.1, 0.05])
-            
-            weight_kg = np.random.lognormal(8, 1.5)
-            distance_km = np.random.lognormal(5.5, 1.2)
-            
+            traffic = np.random.choice(self.traffic_conditions, p=[0.25, 0.45, 0.22, 0.08])
+            weather = np.random.choice(self.weather_conditions, p=[0.45, 0.25, 0.15, 0.04, 0.07, 0.04])
+
+            weight_kg = np.random.uniform(500, 28000)
+            # Mix of realistic distances: 60% from known routes, 40% random
+            if np.random.random() < 0.6:
+                distance_km = np.random.choice(indian_distances) * np.random.uniform(0.9, 1.1)
+            else:
+                distance_km = np.random.uniform(100, 2200)
+
             base_speed = base_speeds[truck_type]
-            weight_factor = 1.0 + (weight_kg / 30000) * 0.25
-            adjusted_speed = base_speed / (weight_factor * traffic_impact[traffic] * weather_impact[weather])
-            
-            travel_time = distance_km / adjusted_speed
-            loading_time = 0.5 + (weight_kg / 8000) * 0.15
-            unloading_time = 0.5 + (weight_kg / 8000) * 0.15
-            rest_breaks = (distance_km / 250) * 0.5
-            
-            total_time = (travel_time + loading_time + unloading_time + rest_breaks) * np.random.normal(1.0, 0.08)
-            
+            # Weight slows truck slightly
+            weight_factor = 1.0 + (weight_kg / 50000) * 0.15
+            effective_speed = base_speed / (weight_factor * traffic_impact[traffic] * weather_impact[weather])
+
+            travel_time = distance_km / effective_speed
+            # Fixed overhead: loading + unloading + mandatory rest
+            loading_time = 0.75
+            unloading_time = 0.75
+            rest_breaks = max(0, (distance_km / 400) * 0.5)  # 30 min rest per 400 km
+
+            total_time = (travel_time + loading_time + unloading_time + rest_breaks) * np.random.normal(1.0, 0.06)
+            total_time = max(total_time, distance_km / 100)  # floor: never faster than 100 km/h
+
             data.append({
                 'weight_kg': weight_kg,
                 'distance_km': distance_km,
@@ -169,7 +182,7 @@ class DeliveryPredictorV2:
                 'weather_condition': weather,
                 'delivery_hours': total_time
             })
-        
+
         return pd.DataFrame(data)
     
     def _train_model(self):
@@ -182,12 +195,37 @@ class DeliveryPredictorV2:
         
         if df is None:
             logger.info("Using synthetic training data...")
-            df = self._generate_synthetic_data(20000)
+            df = self._generate_synthetic_data(30000)
+        else:
+            # Augment real data with synthetic for better coverage
+            synthetic = self._generate_synthetic_data(15000)
+            df = pd.concat([df, synthetic], ignore_index=True)
+            logger.info("Augmented with synthetic: total %d records", len(df))
         
-        # Encode categorical variables
+        self._train_on_dataframe(df)
+
+    def _train_on_dataframe(self, df: pd.DataFrame):
+        """Train on any DataFrame with columns: weight_kg, distance_km, truck_type, traffic_condition, weather_condition, delivery_hours"""
+        logger.info("Training on %d records...", len(df))
+
+        # Fill missing optional columns with defaults
+        if "traffic_condition" not in df.columns:
+            df = df.copy()
+            df["traffic_condition"] = "MODERATE"
+        if "weather_condition" not in df.columns:
+            df = df.copy()
+            df["weather_condition"] = "CLEAR"
+
+        # Fit encoders
         self.truck_encoder.fit(self.truck_types)
         self.traffic_encoder.fit(self.traffic_conditions)
         self.weather_encoder.fit(self.weather_conditions)
+
+        # Clamp unknown categories to known ones
+        df = df.copy()
+        df["truck_type"] = df["truck_type"].where(df["truck_type"].isin(self.truck_types), "CONTAINER_20FT")
+        df["traffic_condition"] = df["traffic_condition"].where(df["traffic_condition"].isin(self.traffic_conditions), "MODERATE")
+        df["weather_condition"] = df["weather_condition"].where(df["weather_condition"].isin(self.weather_conditions), "CLEAR")
         
         # Prepare features
         X_numeric = df[['weight_kg', 'distance_km']].values

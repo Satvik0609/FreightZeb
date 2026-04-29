@@ -120,6 +120,7 @@ function _fuelFallback(data) {
     estimated_liters: liters,
     estimated_cost: parseFloat((liters * 90).toFixed(2)),
     co2_kg: parseFloat(((data.distance_km || 0) * (CO2_RATES[data.truck_type] || 0.60)).toFixed(2)),
+    co2_emissions_kg: parseFloat(((data.distance_km || 0) * (CO2_RATES[data.truck_type] || 0.60)).toFixed(2)),
     fallback: true,
     source: 'heuristic',
   };
@@ -235,6 +236,23 @@ class MLService {
   estimateCo2(distanceKm, truckType) {
     const rate = CO2_RATES[truckType] || 0.60;
     return parseFloat((distanceKm * rate).toFixed(2));
+  }
+
+  async triggerRetrain(requestId, backendUrl, authHeader) {
+    // Bypass circuit breaker — this is an admin action, not a prediction
+    const res = await axios.post(`${ML_URL}/retrain`, {
+      backend_url: backendUrl || process.env.BACKEND_URL || 'http://localhost:5000',
+      auth_header: authHeader || '',
+    }, {
+      timeout: 120_000,
+      headers: {
+        'X-ML-API-Key': ML_API_KEY,
+        'X-Request-ID': requestId || '',
+        'Content-Type': 'application/json',
+      },
+    });
+    recordSuccess(); // reset circuit on success
+    return res.data;
   }
 
   async getHealth(requestId) { return _get('/health', requestId, 5_000); }

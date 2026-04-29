@@ -184,63 +184,79 @@ class DelayPredictorV2:
         return pd.DataFrame(data)
     
     def _load_real_data(self):
-        """Load real DataCo supply chain dataset for delay prediction."""
-        data_path = 'data/DataCoSupplyChainDataset.csv'
-        if not os.path.exists(data_path):
-            return None
+        """Load SCMS + DataCo for delay prediction with real late delivery labels."""
+        results = []
 
-        logger.info("Loading real DataCo supply chain dataset for delay prediction...")
-        df = pd.read_csv(data_path, encoding='latin-1')
+        # 1. SCMS Delivery History — has scheduled vs actual delivery dates
+        scms_path = 'data/SCMS_Delivery_History_Dataset.csv'
+        if os.path.exists(scms_path):
+            try:
+                df = pd.read_csv(scms_path, encoding='latin-1')
+                df.columns = [c.strip().lstrip('\ufeff') for c in df.columns]
+                sched_col = next((c for c in df.columns if 'Scheduled' in c and 'Delivery' in c), None)
+                actual_col = next((c for c in df.columns if 'Delivered' in c and 'Client' in c), None)
+                if sched_col and actual_col:
+                    df[sched_col] = pd.to_datetime(df[sched_col], errors='coerce')
+                    df[actual_col] = pd.to_datetime(df[actual_col], errors='coerce')
+                    df = df.dropna(subset=[sched_col, actual_col])
+                    df['delay_days'] = (df[actual_col] - df[sched_col]).dt.days
+                    for _, row in df.iterrows():
+                        delay = float(row['delay_days'])
+                        # Map delay days → risk level
+                        if delay <= 0:
+                            risk = 'LOW'
+                        elif delay <= 3:
+                            risk = 'MODERATE'
+                        elif delay <= 7:
+                            risk = 'HIGH'
+                        else:
+                            risk = 'CRITICAL'
+                        mode = str(row.get('Shipment Mode', 'Air'))
+                        traffic = 'HEAVY' if 'Air' in mode else 'MODERATE'
+                        results.append({
+                            'distance_km': np.random.choice([346,570,627,836,984,1415,1472,1568,2180]),
+                            'weight_kg': np.random.uniform(500, 20000),
+                            'truck_type': np.random.choice(self.truck_types),
+                            'weather_condition': np.random.choice(self.weather_conditions, p=[0.45,0.25,0.15,0.04,0.07,0.04]),
+                            'traffic_condition': traffic,
+                            'time_of_day': np.random.choice(self.time_of_day),
+                            'risk_level': risk,
+                        })
+                    logger.info("Loaded %d SCMS delay records", len(results))
+            except Exception as e:
+                logger.warning("SCMS load failed: %s", e)
 
-        processed = []
-        for _, row in df.iterrows():
-            distance_km   = float(row.get('Distance', np.random.uniform(50, 2000)))
-            weight_kg     = float(row.get('Product Weight', np.random.uniform(500, 30000)))
-            shipping_mode = str(row.get('Shipping Mode', 'Standard'))
-            late_delivery = int(row.get('Late delivery risk', 0))
-
-            # Map shipping mode → traffic proxy
-            if 'Same Day' in shipping_mode:
-                traffic = 'HEAVY'
-            elif 'First Class' in shipping_mode:
-                traffic = 'LIGHT'
-            elif 'Second Class' in shipping_mode:
-                traffic = 'MODERATE'
-            else:
-                traffic = np.random.choice(self.traffic_conditions, p=[0.2, 0.4, 0.3, 0.1])
-
-            weather = np.random.choice(self.weather_conditions, p=[0.4, 0.2, 0.15, 0.05, 0.1, 0.1])
-            time    = np.random.choice(self.time_of_day)
-            truck   = np.random.choice(self.truck_types)
-
-            # Derive risk level from DataCo's late_delivery_risk flag + heuristics
+        # 2. DataCo Late_delivery_risk flag
+        dataco = 'data/DataCoSupplyChainDataset.csv'
+        if os.path.exists(dataco):
+            df2 = pd.read_csv(dataco, encoding='latin-1')
             weather_risk  = {'CLEAR': 0.0, 'CLOUDY': 0.1, 'RAIN': 0.25, 'STORM': 0.5, 'FOG': 0.35, 'SNOW': 0.45}
             traffic_risk  = {'LIGHT': 0.0, 'MODERATE': 0.15, 'HEAVY': 0.35, 'SEVERE': 0.5}
-            base_risk     = late_delivery * 0.5 + weather_risk[weather] + traffic_risk[traffic]
-            base_risk    += min(distance_km / 2000, 0.3) + min(weight_kg / 50000, 0.2)
-            base_risk     = max(0.0, min(base_risk, 1.2))
+            traffic_map   = {'Same Day': 'HEAVY', 'First Class': 'LIGHT',
+                             'Second Class': 'MODERATE', 'Standard Class': 'MODERATE'}
+            for _, row in df2.iterrows():
+                late = int(row.get('Late_delivery_risk', 0))
+                shipping_mode = str(row.get('Shipping Mode', 'Standard Class'))
+                traffic = traffic_map.get(shipping_mode, 'MODERATE')
+                weather = np.random.choice(self.weather_conditions, p=[0.4,0.2,0.15,0.05,0.1,0.1])
+                base_risk = late * 0.5 + weather_risk[weather] + traffic_risk[traffic]
+                base_risk = max(0.0, min(base_risk, 1.2))
+                if base_risk < 0.3:   risk = 'LOW'
+                elif base_risk < 0.6: risk = 'MODERATE'
+                elif base_risk < 0.9: risk = 'HIGH'
+                else:                 risk = 'CRITICAL'
+                results.append({
+                    'distance_km': np.random.choice([148,281,346,500,570,627,711,836,944,984,1415,1472]),
+                    'weight_kg': float(row.get('Order Item Quantity', 10)) * 180,
+                    'truck_type': np.random.choice(self.truck_types),
+                    'weather_condition': weather,
+                    'traffic_condition': traffic,
+                    'time_of_day': np.random.choice(self.time_of_day),
+                    'risk_level': risk,
+                })
+            logger.info("Total delay records: %d", len(results))
 
-            if base_risk < 0.3:
-                risk_level = 'LOW'
-            elif base_risk < 0.6:
-                risk_level = 'MODERATE'
-            elif base_risk < 0.9:
-                risk_level = 'HIGH'
-            else:
-                risk_level = 'CRITICAL'
-
-            processed.append({
-                'distance_km':       distance_km,
-                'weight_kg':         weight_kg,
-                'truck_type':        truck,
-                'weather_condition': weather,
-                'traffic_condition': traffic,
-                'time_of_day':       time,
-                'risk_level':        risk_level,
-            })
-
-        logger.info("Loaded %d real samples from DataCo dataset", len(processed))
-        return pd.DataFrame(processed)
+        return pd.DataFrame(results) if results else None
 
     def _train_model(self, use_real_data: bool):
         """Train the ML models on real or synthetic data."""

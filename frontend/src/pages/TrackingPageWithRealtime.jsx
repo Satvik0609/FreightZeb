@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { GoogleMap, LoadScript, Marker, Polyline, InfoWindow } from '@react-google-maps/api';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/axios';
-import { getSocket } from '../lib/socket';
-import { useAuthStore } from '../store/authStore';
+import { socket } from '../lib/socket';
 import { MapPin, Navigation, Clock, Package, Truck, AlertCircle, Radio } from 'lucide-react';
 import { format } from 'date-fns';
+import toast from 'react-hot-toast';
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
@@ -16,7 +16,7 @@ const mapContainerStyle = {
 };
 
 const defaultCenter = {
-    lat: 28.6139,
+    lat: 28.6139, // Delhi, India
     lng: 77.2090,
 };
 
@@ -28,105 +28,104 @@ const statusColors = {
     CANCELLED: '#ef4444',
 };
 
-export default function TrackingPage() {
+export default function TrackingPageWithRealtime() {
     const [searchParams, setSearchParams] = useSearchParams();
-    const [bookingId, setBookingId] = useState((searchParams.get('bookingId') || '').trim());
+    const [bookingId, setBookingId] = useState(searchParams.get('bookingId') || '');
     const [selectedMarker, setSelectedMarker] = useState(null);
     const [mapCenter, setMapCenter] = useState(defaultCenter);
     const [mapZoom, setMapZoom] = useState(6);
-    const [isLive, setIsLive] = useState(false);
-    const mapRef = useRef(null);
-    const queryClient = useQueryClient();
-    const token = useAuthStore((s) => s.token);
+    const [isConnected, setIsConnected] = useState(false);
+    const [realtimeUpdates, setRealtimeUpdates] = useState([]);
 
     const { data: trackingData, isLoading, error, refetch } = useQuery({
         queryKey: ['tracking', bookingId],
         queryFn: async () => {
             if (!bookingId) return null;
-            const res = await api.get(`/tracking/${bookingId.trim()}/history`);
+            const res = await api.get(`/tracking/${bookingId}/history`);
             return res.data;
         },
         enabled: !!bookingId,
-        refetchInterval: 30000,
+        refetchInterval: 30000, // Refetch every 30 seconds as fallback
     });
+
+    // Socket.IO real-time connection
+    useEffect(() => {
+        function onConnect() {
+            setIsConnected(true);
+            console.log('Socket connected');
+        }
+
+        function onDisconnect() {
+            setIsConnected(false);
+            console.log('Socket disconnected');
+        }
+
+        function onTrackingUpdate(data) {
+            console.log('Tracking update received:', data);
+
+            // Add to realtime updates
+            setRealtimeUpdates(prev => [...prev, {
+                id: `realtime-${Date.now()}`,
+                latitude: data.latitude,
+                longitude: data.longitude,
+                status: data.status,
+                timestamp: data.timestamp,
+                truckId: data.truckId,
+                isRealtime: true,
+            }]);
+
+            // Show toast notification
+            toast.success('Location updated in real-time!', {
+                icon: '📍',
+                duration: 3000,
+            });
+
+            // Update map center to new location
+            setMapCenter({ lat: data.latitude, lng: data.longitude });
+
+            // Refetch to get complete data
+            refetch();
+        }
+
+        socket.on('connect', onConnect);
+        socket.on('disconnect', onDisconnect);
+        socket.on('tracking:update', onTrackingUpdate);
+
+        // Join booking room when bookingId changes
+        if (bookingId) {
+            socket.emit('join', `booking:${bookingId}`);
+            console.log(`Joined room: booking:${bookingId}`);
+        }
+
+        return () => {
+            socket.off('connect', onConnect);
+            socket.off('disconnect', onDisconnect);
+            socket.off('tracking:update', onTrackingUpdate);
+
+            // Leave booking room
+            if (bookingId) {
+                socket.emit('leave', `booking:${bookingId}`);
+            }
+        };
+    }, [bookingId, refetch]);
 
     const handleSearch = (e) => {
         e.preventDefault();
         if (bookingId.trim()) {
             setSearchParams({ bookingId: bookingId.trim() });
+            setRealtimeUpdates([]); // Clear realtime updates when searching new booking
             refetch();
         }
     };
 
+    // Center map on latest location when data loads
     useEffect(() => {
         if (trackingData?.trackingLogs?.length > 0) {
             const latest = trackingData.trackingLogs[trackingData.trackingLogs.length - 1];
-            const center = { lat: latest.latitude, lng: latest.longitude };
-            setMapCenter(center);
+            setMapCenter({ lat: latest.latitude, lng: latest.longitude });
             setMapZoom(12);
-            // Pan the map if it's already mounted
-            if (mapRef.current) {
-                mapRef.current.panTo(center);
-                mapRef.current.setZoom(12);
-            }
         }
     }, [trackingData]);
-
-    // Real-time socket tracking
-    useEffect(() => {
-        if (!bookingId || !token) return;
-
-        const socket = getSocket(token);
-
-        if (!socket.connected) {
-            socket.connect();
-        }
-
-        const room = `booking:${bookingId}`;
-        socket.emit('join', room);
-        setIsLive(false);
-
-        socket.on('connect', () => {
-            socket.emit('join', room);
-        });
-
-        socket.on('tracking:update', (update) => {
-            setIsLive(true);
-            const newLog = {
-                id: update.timestamp,
-                bookingId: update.bookingId,
-                truckId: update.truckId,
-                latitude: update.latitude,
-                longitude: update.longitude,
-                status: update.status,
-                timestamp: update.timestamp,
-            };
-
-            // Append the new log into the cached query data immediately
-            queryClient.setQueryData(['tracking', bookingId], (old) => {
-                if (!old) return old;
-                return {
-                    ...old,
-                    status: update.status,
-                    trackingLogs: [...old.trackingLogs, newLog],
-                };
-            });
-
-            // Pan map to new position
-            const center = { lat: update.latitude, lng: update.longitude };
-            setMapCenter(center);
-            if (mapRef.current) {
-                mapRef.current.panTo(center);
-            }
-        });
-
-        return () => {
-            socket.emit('leave', room);
-            socket.off('connect');
-            socket.off('tracking:update');
-            setIsLive(false);
-        };
-    }, [bookingId, token, queryClient]);
 
     const getStatusIcon = (status) => {
         switch (status) {
@@ -141,18 +140,38 @@ export default function TrackingPage() {
         }
     };
 
-    const pathCoordinates = trackingData?.trackingLogs?.map(log => ({
+    // Combine tracking logs with realtime updates
+    const allLogs = [
+        ...(trackingData?.trackingLogs || []),
+        ...realtimeUpdates,
+    ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    const pathCoordinates = allLogs.map(log => ({
         lat: log.latitude,
         lng: log.longitude,
-    })) || [];
+    }));
 
     return (
         <div className="p-6 max-w-7xl mx-auto">
             <div className="mb-6">
-                <h1 className="text-3xl font-bold text-gray-900 mb-2">Track Your Shipment</h1>
-                <p className="text-gray-600">Real-time tracking of your freight shipments</p>
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="text-3xl font-bold text-gray-900 mb-2">Track Your Shipment</h1>
+                        <p className="text-gray-600">Real-time tracking of your freight shipments</p>
+                    </div>
+
+                    {/* Connection Status */}
+                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${isConnected ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'
+                        }`}>
+                        <Radio className={`w-4 h-4 ${isConnected ? 'animate-pulse' : ''}`} />
+                        <span className="text-sm font-medium">
+                            {isConnected ? 'Live' : 'Offline'}
+                        </span>
+                    </div>
+                </div>
             </div>
 
+            {/* Search Form */}
             <form onSubmit={handleSearch} className="mb-6">
                 <div className="flex gap-3">
                     <input
@@ -171,6 +190,7 @@ export default function TrackingPage() {
                 </div>
             </form>
 
+            {/* Error State */}
             {error && (
                 <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
@@ -181,6 +201,7 @@ export default function TrackingPage() {
                 </div>
             )}
 
+            {/* Loading State */}
             {isLoading && (
                 <div className="text-center py-12">
                     <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -188,8 +209,10 @@ export default function TrackingPage() {
                 </div>
             )}
 
+            {/* Tracking Data */}
             {trackingData && !isLoading && (
                 <div className="space-y-6">
+                    {/* Status Card */}
                     <div className="bg-white rounded-lg shadow-md p-6">
                         <div className="flex items-center justify-between mb-4">
                             <div>
@@ -202,12 +225,11 @@ export default function TrackingPage() {
                                         {trackingData.status.replace('_', ' ')}
                                     </span>
                                     <span className="text-gray-500 text-sm">
-                                        {trackingData.trackingLogs?.length || 0} location updates
+                                        {allLogs.length} location updates
                                     </span>
-                                    {isLive && (
-                                        <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
-                                            <Radio className="w-3 h-3 animate-pulse" />
-                                            LIVE
+                                    {realtimeUpdates.length > 0 && (
+                                        <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                                            +{realtimeUpdates.length} live
                                         </span>
                                     )}
                                 </div>
@@ -221,18 +243,19 @@ export default function TrackingPage() {
                         </div>
                     </div>
 
+                    {/* Map */}
                     <div className="bg-white rounded-lg shadow-md overflow-hidden">
                         <LoadScript googleMapsApiKey={GOOGLE_MAPS_API_KEY}>
                             <GoogleMap
                                 mapContainerStyle={mapContainerStyle}
                                 center={mapCenter}
                                 zoom={mapZoom}
-                                onLoad={(map) => { mapRef.current = map; }}
                                 options={{
                                     streetViewControl: false,
                                     mapTypeControl: true,
                                 }}
                             >
+                                {/* Path Line */}
                                 {pathCoordinates.length > 1 && (
                                     <Polyline
                                         path={pathCoordinates}
@@ -244,26 +267,31 @@ export default function TrackingPage() {
                                     />
                                 )}
 
-                                {trackingData.trackingLogs?.map((log, index) => {
-                                    const isLatest = index === trackingData.trackingLogs.length - 1;
+                                {/* Markers */}
+                                {allLogs.map((log, index) => {
+                                    const isLatest = index === allLogs.length - 1;
                                     const isFirst = index === 0;
-                                    const iconUrl = isLatest
-                                        ? 'https://maps.google.com/mapfiles/ms/icons/red-dot.png'
-                                        : isFirst
-                                            ? 'https://maps.google.com/mapfiles/ms/icons/green-dot.png'
-                                            : 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png';
+                                    const isRealtime = log.isRealtime;
 
                                     return (
                                         <Marker
                                             key={log.id}
                                             position={{ lat: log.latitude, lng: log.longitude }}
                                             onClick={() => setSelectedMarker(log)}
-                                            icon={iconUrl}
-                                            zIndex={isLatest ? 999 : index}
+                                            icon={{
+                                                path: window.google.maps.SymbolPath.CIRCLE,
+                                                scale: isLatest ? 12 : isFirst ? 10 : 6,
+                                                fillColor: isRealtime ? '#10b981' : isLatest ? '#10b981' : isFirst ? '#3b82f6' : statusColors[log.status],
+                                                fillOpacity: 1,
+                                                strokeColor: isRealtime ? '#059669' : '#ffffff',
+                                                strokeWeight: isRealtime ? 3 : 2,
+                                            }}
+                                            animation={isRealtime ? window.google.maps.Animation.BOUNCE : null}
                                         />
                                     );
                                 })}
 
+                                {/* Info Window */}
                                 {selectedMarker && (
                                     <InfoWindow
                                         position={{ lat: selectedMarker.latitude, lng: selectedMarker.longitude }}
@@ -273,6 +301,11 @@ export default function TrackingPage() {
                                             <div className="flex items-center gap-2 mb-2">
                                                 {getStatusIcon(selectedMarker.status)}
                                                 <span className="font-semibold">{selectedMarker.status.replace('_', ' ')}</span>
+                                                {selectedMarker.isRealtime && (
+                                                    <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">
+                                                        LIVE
+                                                    </span>
+                                                )}
                                             </div>
                                             <p className="text-sm text-gray-600 mb-1">
                                                 <Clock className="w-3 h-3 inline mr-1" />
@@ -294,25 +327,34 @@ export default function TrackingPage() {
                         </LoadScript>
                     </div>
 
+                    {/* Timeline */}
                     <div className="bg-white rounded-lg shadow-md p-6">
                         <h3 className="text-lg font-semibold text-gray-900 mb-4">Tracking History</h3>
                         <div className="space-y-4">
-                            {trackingData.trackingLogs?.slice().reverse().map((log, index) => (
+                            {allLogs.slice().reverse().map((log, index) => (
                                 <div key={log.id} className="flex gap-4">
                                     <div className="flex flex-col items-center">
                                         <div
-                                            className="w-10 h-10 rounded-full flex items-center justify-center text-white"
+                                            className={`w-10 h-10 rounded-full flex items-center justify-center text-white ${log.isRealtime ? 'ring-2 ring-green-400 ring-offset-2' : ''
+                                                }`}
                                             style={{ backgroundColor: statusColors[log.status] }}
                                         >
                                             {getStatusIcon(log.status)}
                                         </div>
-                                        {index < trackingData.trackingLogs.length - 1 && (
+                                        {index < allLogs.length - 1 && (
                                             <div className="w-0.5 h-full bg-gray-300 my-1"></div>
                                         )}
                                     </div>
                                     <div className="flex-1 pb-4">
                                         <div className="flex items-center justify-between mb-1">
-                                            <h4 className="font-semibold text-gray-900">{log.status.replace('_', ' ')}</h4>
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="font-semibold text-gray-900">{log.status.replace('_', ' ')}</h4>
+                                                {log.isRealtime && (
+                                                    <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                                                        LIVE UPDATE
+                                                    </span>
+                                                )}
+                                            </div>
                                             <span className="text-sm text-gray-500">
                                                 {format(new Date(log.timestamp), 'MMM dd, yyyy HH:mm')}
                                             </span>
@@ -331,6 +373,7 @@ export default function TrackingPage() {
                 </div>
             )}
 
+            {/* Empty State */}
             {!trackingData && !isLoading && !error && (
                 <div className="text-center py-12 bg-white rounded-lg shadow-md">
                     <MapPin className="w-16 h-16 text-gray-400 mx-auto mb-4" />

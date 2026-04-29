@@ -12,8 +12,8 @@ const { protect, restrictTo } = require('../middleware/authMiddleware');
 
 router.use(protect);
 
-router.get('/warehouse', restrictTo('WAREHOUSE', 'ADMIN'), getWarehouseAnalytics);
-router.get('/warehouse/charts', restrictTo('WAREHOUSE', 'ADMIN'), getWarehouseAnalyticsCharts);
+router.get('/warehouse', restrictTo('WAREHOUSE', 'CARGO_DEALER', 'ADMIN'), getWarehouseAnalytics);
+router.get('/warehouse/charts', restrictTo('WAREHOUSE', 'CARGO_DEALER', 'ADMIN'), getWarehouseAnalyticsCharts);
 router.get('/dealer', restrictTo('DEALER', 'ADMIN'), getDealerAnalytics);
 router.get('/dealer/charts', restrictTo('DEALER', 'ADMIN'), getDealerAnalyticsCharts);
 router.get('/admin', restrictTo('ADMIN'), getAdminAnalytics);

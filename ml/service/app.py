@@ -372,6 +372,109 @@ async def optimize_route(body: RouteRequest, model=Depends(require_model("route_
         logger.exception("optimize-route failed")
         raise HTTPException(500, detail=str(exc)) from exc
 
+class RetrainRequest(BaseModel):
+    backend_url: str = Field("http://localhost:5000")
+    auth_header: str = Field("")
+    model_config = {"extra": "forbid"}
+
+@app.post("/retrain", dependencies=[Depends(verify_api_key)], tags=["ops"])
+async def retrain_models(body: RetrainRequest):
+    """Fetch real data from the backend DB and retrain all models."""
+    import httpx
+
+    logger.info("Retrain triggered — fetching training data from backend at %s", body.backend_url)
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{body.backend_url}/api/ml/training-data",
+                headers={"Authorization": body.auth_header},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.error("Failed to fetch training data: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "BACKEND_UNAVAILABLE", "message": str(exc)},
+        )
+
+    delivery_records = data.get("delivery", [])
+    fuel_records = data.get("fuel", [])
+    truck_records = data.get("truck", [])
+    counts = data.get("counts", {})
+
+    logger.info("Training data received: %s", counts)
+
+    results = {}
+
+    # ── Retrain delivery predictor ────────────────────────────────────────────
+    if len(delivery_records) >= 10:
+        try:
+            import pandas as pd
+            from models.delivery_predictor_v2 import DeliveryPredictorV2
+            df = pd.DataFrame(delivery_records)
+            # Add required columns with defaults if missing
+            if "traffic_condition" not in df.columns:
+                df["traffic_condition"] = "MODERATE"
+            if "weather_condition" not in df.columns:
+                df["weather_condition"] = "CLEAR"
+            model = DeliveryPredictorV2.__new__(DeliveryPredictorV2)
+            model.__init__.__func__(model, use_real_data=False, force_retrain=True)
+            # Inject real data into training
+            model._train_on_dataframe(df)
+            _models["delivery_predictor"] = model
+            results["delivery_predictor"] = {"status": "retrained", "records": len(df), "r2": model.r2_score, "mae": model.mae}
+            logger.info("Delivery predictor retrained on %d real records (R²=%.4f)", len(df), model.r2_score)
+        except Exception as exc:
+            logger.error("Delivery predictor retrain failed: %s", exc)
+            results["delivery_predictor"] = {"status": "failed", "error": str(exc)}
+    else:
+        results["delivery_predictor"] = {"status": "skipped", "reason": f"only {len(delivery_records)} records (need 10+)"}
+
+    # ── Retrain fuel estimator ────────────────────────────────────────────────
+    if len(fuel_records) >= 10:
+        try:
+            import pandas as pd
+            from models.fuel_estimator_v2 import FuelEstimatorV2
+            df = pd.DataFrame(fuel_records)
+            model = FuelEstimatorV2.__new__(FuelEstimatorV2)
+            model.__init__.__func__(model, use_real_data=False, force_retrain=True)
+            model._train_on_dataframe(df)
+            _models["fuel_estimator"] = model
+            results["fuel_estimator"] = {"status": "retrained", "records": len(df), "r2": model.r2_score, "mae": model.mae}
+            logger.info("Fuel estimator retrained on %d real records (R²=%.4f)", len(df), model.r2_score)
+        except Exception as exc:
+            logger.error("Fuel estimator retrain failed: %s", exc)
+            results["fuel_estimator"] = {"status": "failed", "error": str(exc)}
+    else:
+        results["fuel_estimator"] = {"status": "skipped", "reason": f"only {len(fuel_records)} records (need 10+)"}
+
+    # ── Retrain truck recommender ─────────────────────────────────────────────
+    if len(truck_records) >= 10:
+        try:
+            import pandas as pd
+            from models.truck_recommender_v2 import TruckRecommenderV2
+            df = pd.DataFrame(truck_records)
+            model = TruckRecommenderV2.__new__(TruckRecommenderV2)
+            model.__init__.__func__(model, use_real_data=False, force_retrain=True)
+            model._train_on_dataframe(df)
+            _models["truck_recommender"] = model
+            results["truck_recommender"] = {"status": "retrained", "records": len(df), "accuracy": model.accuracy}
+            logger.info("Truck recommender retrained on %d real records (acc=%.4f)", len(df), model.accuracy)
+        except Exception as exc:
+            logger.error("Truck recommender retrain failed: %s", exc)
+            results["truck_recommender"] = {"status": "failed", "error": str(exc)}
+    else:
+        results["truck_recommender"] = {"status": "skipped", "reason": f"only {len(truck_records)} records (need 10+)"}
+
+    return {
+        "success": True,
+        "message": "Retrain complete",
+        "data_counts": counts,
+        "results": results,
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

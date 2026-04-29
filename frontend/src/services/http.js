@@ -22,6 +22,16 @@ export async function del(path, config) {
 }
 
 export function normalizeList(payload, key) {
+  // Handle { data: [...], pagination: {...} } shape from paginatedResponse
+  if (Array.isArray(payload?.data)) {
+    return {
+      items: payload.data,
+      total: payload.pagination?.total ?? payload.data.length,
+      page: payload.pagination?.page ?? 1,
+      limit: payload.pagination?.limit ?? 20,
+    };
+  }
+  // Handle { [key]: [...], total, page, limit } shape
   return paginateResult(payload, key);
 }
 

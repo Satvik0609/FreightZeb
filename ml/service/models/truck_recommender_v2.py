@@ -82,47 +82,11 @@ class TruckRecommenderV2:
         logger.info(f"TruckRecommenderV2 ready - Accuracy: {self.accuracy:.2%}, CV: {self.cv_score:.2%}")
     
     def _load_real_data(self):
-        """Load real Kaggle dataset if available."""
-        data_path = 'data/DataCoSupplyChainDataset.csv'
-        
-        if os.path.exists(data_path):
-            logger.info("Loading real DataCo supply chain dataset...")
-            df = pd.read_csv(data_path)
-            
-            # Map dataset columns to our features
-            # DataCo has: Order Item Quantity, Shipping Mode, Product Weight, etc.
-            processed_data = []
-            
-            for _, row in df.iterrows():
-                # Extract relevant features
-                weight = row.get('Product Weight', np.random.uniform(100, 20000))
-                volume = weight / 300  # Estimate volume from weight
-                distance = row.get('Distance', np.random.uniform(50, 1500))
-                
-                # Map shipping mode to truck type
-                shipping_mode = str(row.get('Shipping Mode', 'Standard'))
-                if 'Same Day' in shipping_mode or 'Express' in shipping_mode:
-                    truck_type = np.random.choice(['SMALL_VAN', 'REEFER'])
-                elif 'First Class' in shipping_mode:
-                    truck_type = 'CONTAINER_20FT'
-                else:
-                    truck_type = np.random.choice(['CONTAINER_32FT', 'FLATBED_TRAILER'])
-                
-                cargo_type = 'GENERAL'
-                priority = 'HIGH' if 'Express' in shipping_mode else 'NORMAL'
-                
-                processed_data.append({
-                    'weight_kg': weight,
-                    'volume_m3': volume,
-                    'distance_km': distance,
-                    'cargo_type': cargo_type,
-                    'priority': priority,
-                    'truck_type': truck_type
-                })
-            
-            logger.info(f"Loaded {len(processed_data)} real samples from DataCo dataset")
-            return pd.DataFrame(processed_data)
-        
+        """
+        DataCo doesn't have reliable truck-type labels — shipping mode → truck type
+        mapping is too noisy to train on. Return None and use the well-engineered
+        synthetic data which correctly encodes Indian logistics capacity rules.
+        """
         return None
     
     def _generate_synthetic_data(self, n_samples=15000):
@@ -170,16 +134,34 @@ class TruckRecommenderV2:
         """Train models on real or synthetic data."""
         logger.info("Training Truck Recommender V2...")
         
-        # Try to load real data first
         df = None
         if self.use_real_data:
             df = self._load_real_data()
         
-        # Fallback to synthetic data
         if df is None:
             logger.info("Using synthetic training data...")
-            df = self._generate_synthetic_data(15000)
-        
+            df = self._generate_synthetic_data(30000)
+
+        self._train_on_dataframe(df)
+
+    def _train_on_dataframe(self, df: pd.DataFrame):
+        """Train on any DataFrame with columns: weight_kg, volume_m3, distance_km, cargo_type, truck_type"""
+        logger.info("Training truck recommender on %d records...", len(df))
+
+        df = df.copy()
+        if "volume_m3" not in df.columns:
+            df["volume_m3"] = df["weight_kg"] / 300
+        if "cargo_type" not in df.columns:
+            df["cargo_type"] = "GENERAL"
+        if "priority" not in df.columns:
+            df["priority"] = "NORMAL"
+
+        # Map REFRIGERATED → PERISHABLE for cargo encoder
+        df["cargo_type"] = df["cargo_type"].replace("REFRIGERATED", "PERISHABLE")
+        df["cargo_type"] = df["cargo_type"].where(df["cargo_type"].isin(self.cargo_types), "GENERAL")
+        df["truck_type"] = df["truck_type"].where(df["truck_type"].isin(self.truck_types), "CONTAINER_20FT")
+        df["priority"] = df["priority"].where(df["priority"].isin(self.priorities), "NORMAL")
+
         # Encode labels
         self.label_encoder.fit(self.truck_types)
         self.cargo_encoder.fit(self.cargo_types)

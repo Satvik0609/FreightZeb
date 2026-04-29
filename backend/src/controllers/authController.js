@@ -32,7 +32,7 @@ async function register(req, res, next) {
     }
 
     // Prevent self-promotion to ADMIN via public registration
-    const allowedRoles = ['WAREHOUSE', 'DEALER'];
+    const allowedRoles = ['WAREHOUSE', 'DEALER', 'CARGO_DEALER'];
     const assignedRole = allowedRoles.includes(role) ? role : 'WAREHOUSE';
 
     const hashed = await bcrypt.hash(password, 12);
@@ -104,8 +104,8 @@ async function updateMe(req, res, next) {
     const { name, phone, company } = req.body;
     // Only update fields that were explicitly provided
     const data = {};
-    if (name    !== undefined) data.name    = name;
-    if (phone   !== undefined) data.phone   = phone;
+    if (name !== undefined) data.name = name;
+    if (phone !== undefined) data.phone = phone;
     if (company !== undefined) data.company = company;
 
     const user = await prisma.user.update({
@@ -170,7 +170,7 @@ async function forgotPassword(req, res, next) {
       data: { passwordResetToken: hashedToken, passwordResetExpiry: expiry },
     });
 
-    emailService.sendPasswordReset({ to: user.email, resetToken: plainToken }).catch(() => {});
+    emailService.sendPasswordReset({ to: user.email, resetToken: plainToken }).catch(() => { });
     logger.info(`Password reset requested for: ${user.email}`);
 
     res.json(SAFE_RESPONSE);

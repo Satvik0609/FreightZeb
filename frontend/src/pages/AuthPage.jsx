@@ -83,8 +83,9 @@ export default function AuthPage({ mode = "login" }) {
                 <Input label="Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
                 <div className="grid gap-4 md:grid-cols-2">
                   <Select label="Role" value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
-                    <option value="WAREHOUSE">WAREHOUSE</option>
-                    <option value="DEALER">DEALER</option>
+                    <option value="WAREHOUSE">Warehouse Manager</option>
+                    <option value="DEALER">Truck Dealer</option>
+                    <option value="CARGO_DEALER">Cargo Dealer</option>
                   </Select>
                   <Input label="Phone" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} />
                 </div>

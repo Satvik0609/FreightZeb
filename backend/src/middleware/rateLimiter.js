@@ -19,8 +19,8 @@ const apiLimiter = rateLimit({
 
 const mlLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 20,
-    message: { success: false, message: 'ML prediction rate limit exceeded. Max 20/min.' },
+    max: 100,
+    message: { success: false, message: 'ML prediction rate limit exceeded. Max 100/min.' },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => req.user?.id || ipKeyGenerator(req),

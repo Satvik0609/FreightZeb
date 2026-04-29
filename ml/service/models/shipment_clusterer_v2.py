@@ -63,33 +63,86 @@ class ShipmentClustererV2:
         logger.info(f"ShipmentClustererV2 ready - Silhouette: {self.silhouette_score:.4f}, DB Index: {self.davies_bouldin_score:.4f}")
     
     def _load_real_data(self):
-        """Load real DataCo supply chain dataset."""
+        """Load Olist geolocation + orders for real spatial clustering."""
+        olist_geo    = 'data/olist_geolocation_dataset.csv'
+        olist_orders = 'data/olist_orders_dataset.csv'
+        olist_items  = 'data/olist_order_items_dataset.csv'
+        olist_prods  = 'data/olist_products_dataset.csv'
+
+        if all(os.path.exists(p) for p in [olist_geo, olist_orders, olist_items, olist_prods]):
+            logger.info("Loading Olist geolocation dataset for clustering...")
+            geo    = pd.read_csv(olist_geo)
+            orders = pd.read_csv(olist_orders)
+            items  = pd.read_csv(olist_items)
+            prods  = pd.read_csv(olist_prods)
+
+            # Only delivered orders
+            orders = orders[orders['order_status'] == 'delivered']
+
+            # Join items → products
+            items = items.merge(
+                prods[['product_id','product_weight_g','product_length_cm',
+                        'product_height_cm','product_width_cm']],
+                on='product_id', how='left')
+            items['weight_kg'] = items['product_weight_g'].fillna(5000) / 1000
+            items['volume_m3'] = (items['product_length_cm'].fillna(30) *
+                                  items['product_height_cm'].fillna(20) *
+                                  items['product_width_cm'].fillna(20)) / 1_000_000
+            order_agg = items.groupby('order_id').agg(
+                weight_kg=('weight_kg','sum'),
+                volume_m3=('volume_m3','sum'),
+                freight_value=('freight_value','sum'),
+            ).reset_index()
+
+            merged = orders.merge(order_agg, on='order_id', how='inner')
+
+            # Get customer zip → lat/lng from geolocation
+            geo_agg = geo.groupby('geolocation_zip_code_prefix').agg(
+                latitude=('geolocation_lat','mean'),
+                longitude=('geolocation_lng','mean'),
+            ).reset_index()
+            geo_agg.columns = ['customer_zip_prefix','latitude','longitude']
+
+            # Olist customers table has zip
+            customers = pd.read_csv('data/olist_customers_dataset.csv') if os.path.exists('data/olist_customers_dataset.csv') else None
+            if customers is not None:
+                customers['customer_zip_prefix'] = customers['customer_zip_code_prefix'].astype(str).str[:5].astype(int, errors='ignore')
+                merged = merged.merge(customers[['customer_id','customer_zip_prefix']], on='customer_id', how='left')
+                merged = merged.merge(geo_agg, on='customer_zip_prefix', how='left')
+            else:
+                merged['latitude']  = np.random.uniform(-33, 5, len(merged))
+                merged['longitude'] = np.random.uniform(-73, -35, len(merged))
+
+            merged = merged.dropna(subset=['latitude','longitude'])
+            merged['value_usd']      = merged['freight_value'].fillna(50)
+            merged['priority_score'] = (merged['weight_kg'] / merged['weight_kg'].max() * 10).clip(1, 10)
+
+            result = merged[['latitude','longitude','weight_kg','volume_m3','value_usd','priority_score']].dropna()
+            # Sample to 50k for speed
+            if len(result) > 50000:
+                result = result.sample(50000, random_state=42)
+            logger.info("Loaded %d Olist geolocation shipment samples", len(result))
+            return result
+
+        # Fallback to DataCo
         data_path = 'data/DataCoSupplyChainDataset.csv'
-        
         if os.path.exists(data_path):
             logger.info("Loading real DataCo supply chain dataset...")
             df = pd.read_csv(data_path, encoding='latin-1')
-            
             processed_data = []
             for _, row in df.iterrows():
-                # Extract location and shipment features
                 lat = row.get('Latitude', np.random.uniform(-90, 90))
                 lon = row.get('Longitude', np.random.uniform(-180, 180))
                 weight = row.get('Product Weight', np.random.uniform(100, 20000))
                 price = row.get('Product Price', np.random.uniform(10, 1000))
-                
                 processed_data.append({
-                    'latitude': lat,
-                    'longitude': lon,
-                    'weight_kg': weight,
-                    'volume_m3': weight / 300,
-                    'value_usd': price,
-                    'priority_score': np.random.uniform(1, 10)
+                    'latitude': lat, 'longitude': lon,
+                    'weight_kg': weight, 'volume_m3': weight / 300,
+                    'value_usd': price, 'priority_score': np.random.uniform(1, 10)
                 })
-            
             logger.info(f"Loaded {len(processed_data)} real shipment samples")
             return pd.DataFrame(processed_data)
-        
+
         return None
     
     def _generate_synthetic_data(self, n_samples=10000):

@@ -55,7 +55,7 @@ async function getUser(req, res, next) {
 async function updateUserRole(req, res, next) {
     try {
         const { role } = req.body;
-        if (!['ADMIN', 'WAREHOUSE', 'DEALER'].includes(role)) {
+        if (!['ADMIN', 'WAREHOUSE', 'DEALER', 'CARGO_DEALER'].includes(role)) {
             return res.status(400).json({ success: false, message: 'Invalid role' });
         }
         if (req.params.id === req.user.id) {

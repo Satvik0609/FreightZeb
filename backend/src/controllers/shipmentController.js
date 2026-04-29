@@ -4,6 +4,7 @@ const mlService = require('../services/mlService');
 const logger = require('../config/logger');
 const { parsePagination } = require('../helpers/pagination');
 const {
+  emitShipmentCreated,
   emitShipmentStatusUpdate,
   emitShipmentPredictionsUpdated,
   emitShipmentOptimized,
@@ -20,10 +21,101 @@ function getPredictionModelVersion(result) {
   return result?.fallback ? 'fallback-heuristic' : '2.0.0';
 }
 
+function shipmentDistanceKm(pickupLocation, destination) {
+  const lat1 = Number(pickupLocation?.lat);
+  const lng1 = Number(pickupLocation?.lng);
+  const lat2 = Number(destination?.lat);
+  const lng2 = Number(destination?.lng);
+  if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) return 700;
+
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return Number((R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(2));
+}
+
+async function buildMlPredictions({ shipment, distanceKm, truckType, truckRecommendation, requestId }) {
+  const [etaResult, fuelResult, delayResult] = await Promise.all([
+    mlService.predictDeliveryTime({
+      weight_kg: shipment.weightKg,
+      distance_km: distanceKm,
+      truck_type: truckType,
+      traffic_condition: 'MODERATE',
+      weather_condition: 'CLEAR',
+    }, requestId),
+    mlService.estimateFuel({
+      distance_km: distanceKm,
+      weight_kg: shipment.weightKg,
+      truck_type: truckType,
+    }, requestId),
+    mlService.predictDelayRisk({
+      distance_km: distanceKm,
+      weight_kg: shipment.weightKg,
+      truck_type: truckType,
+      weather_condition: 'CLEAR',
+      traffic_condition: 'MODERATE',
+      time_of_day: shipment.deadline ? 'EVENING' : 'AFTERNOON',
+    }, requestId),
+  ]);
+
+  const predictions = [];
+  if (etaResult?.predicted_hours != null) {
+    predictions.push({
+      shipmentId: shipment.id,
+      type: 'ETA_HOURS',
+      value: etaResult.predicted_hours,
+      confidence: etaResult.confidence ?? null,
+      modelVersion: getPredictionModelVersion(etaResult),
+    });
+  }
+  if (fuelResult?.estimated_liters != null) {
+    predictions.push({
+      shipmentId: shipment.id,
+      type: 'FUEL_ESTIMATE_LITERS',
+      value: fuelResult.estimated_liters,
+      confidence: fuelResult.confidence ?? null,
+      modelVersion: getPredictionModelVersion(fuelResult),
+    });
+  }
+  const co2Kg = fuelResult?.co2_emissions_kg ?? fuelResult?.co2_kg ?? mlService.estimateCo2(distanceKm, truckType);
+  if (co2Kg != null) {
+    predictions.push({
+      shipmentId: shipment.id,
+      type: 'CO2_KG',
+      value: co2Kg,
+      confidence: fuelResult?.confidence ?? null,
+      modelVersion: fuelResult?.fallback ? 'fallback-heuristic' : 'derived-from-fuel-model',
+    });
+  }
+  if (delayResult?.delay_probability != null) {
+    predictions.push({
+      shipmentId: shipment.id,
+      type: 'DELAY_RISK_PERCENT',
+      value: delayResult.delay_probability,
+      confidence: delayResult.confidence ?? null,
+      modelVersion: getPredictionModelVersion(delayResult),
+    });
+  }
+  if (truckRecommendation) {
+    predictions.push({
+      shipmentId: shipment.id,
+      type: 'RECOMMENDED_TRUCK_SCORE',
+      value: truckRecommendation.confidence ?? 0.8,
+      confidence: truckRecommendation.confidence ?? null,
+      modelVersion: getPredictionModelVersion(truckRecommendation),
+    });
+  }
+
+  return predictions;
+}
+
 // ── Warehouse: create shipment ───────────────────────────────────────────────
 async function createShipment(req, res, next) {
   try {
     const { weightKg, volumeM3, boxes, pickupLocation, destination, deadline, description, requirements } = req.body;
+    const io = req.app.get('io');
 
     const shipment = await prisma.shipment.create({
       data: {
@@ -41,7 +133,55 @@ async function createShipment(req, res, next) {
     });
 
     logger.info(`Shipment created: ${shipment.id} by ${req.user.id}`);
+
+    // Emit real-time creation event immediately
+    emitShipmentCreated(io, {
+      shipmentId: shipment.id,
+      warehouseId: shipment.warehouseId,
+      shipment,
+      source: 'shipment:create',
+    });
+
     res.status(201).json({ success: true, shipment });
+
+    // ── Async ML predictions after response is sent ──────────────────────────
+    setImmediate(async () => {
+      try {
+        const cargo_type = inferCargoType(requirements);
+        const distanceKm = shipmentDistanceKm(pickupLocation, destination);
+
+        const truckRec = await mlService.predictTruckRecommendation({
+          weight_kg: weightKg,
+          volume_m3: volumeM3 ?? 0.001,
+          distance_km: distanceKm,
+          cargo_type,
+          priority: deadline ? 'URGENT' : 'NORMAL',
+        });
+        const recommendedTruckType = truckRec?.recommended_truck || 'CONTAINER_20FT';
+        const predictions = await buildMlPredictions({
+          shipment,
+          distanceKm,
+          truckType: recommendedTruckType,
+          truckRecommendation: truckRec,
+          requestId: req.id,
+        });
+
+        if (predictions.length > 0) {
+          await prisma.prediction.createMany({ data: predictions });
+          logger.info(`Auto-predictions saved for shipment ${shipment.id}: ${predictions.map(p => p.type).join(', ')}`);
+
+          emitShipmentPredictionsUpdated(io, {
+            shipmentId: shipment.id,
+            warehouseId: shipment.warehouseId,
+            predictions,
+            source: 'shipment:create',
+            trigger: 'auto',
+          });
+        }
+      } catch (mlErr) {
+        logger.warn(`Auto-prediction failed for shipment ${shipment.id}: ${mlErr.message}`);
+      }
+    });
   } catch (err) {
     next(err);
   }
@@ -71,6 +211,42 @@ async function getMyShipments(req, res, next) {
         where,
         include: {
           bookings: { include: { truck: true } },
+          predictions: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.shipment.count({ where }),
+    ]);
+
+    res.json({ success: true, total, page: Number(page), limit: Number(limit), shipments });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── All roles: browse bookable shipments (DEALER sees these to know what's available) ──
+async function getAvailableShipments(req, res, next) {
+  try {
+    const { status, search } = req.query;
+    const { page, limit, skip } = parsePagination(req.query);
+
+    // Default to bookable statuses unless a specific status is requested
+    const bookableStatuses = ['PENDING', 'OPTIMIZED'];
+    const where = {
+      status: status ? status : { in: bookableStatuses },
+    };
+    if (search) {
+      where.OR = [{ description: { contains: search, mode: 'insensitive' } }];
+    }
+
+    const [shipments, total] = await Promise.all([
+      prisma.shipment.findMany({
+        where,
+        include: {
+          warehouse: { select: { id: true, name: true, company: true } },
+          bookings: { include: { truck: true }, take: 1, orderBy: { createdAt: 'desc' } },
           predictions: true,
         },
         orderBy: { createdAt: 'desc' },
@@ -144,7 +320,9 @@ async function getShipment(req, res, next) {
 
     const isOwner = shipment.warehouseId === req.user.id;
     const isAdmin = req.user.role === 'ADMIN';
-    if (!isOwner && !isAdmin) {
+    const isBookableForDealer = req.user.role === 'DEALER' && ['PENDING', 'OPTIMIZED'].includes(shipment.status);
+    const isDealerOnBooking = req.user.role === 'DEALER' && shipment.bookings?.some((booking) => booking.dealerId === req.user.id);
+    if (!isOwner && !isAdmin && !isBookableForDealer && !isDealerOnBooking) {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
 
@@ -191,7 +369,7 @@ async function cancelShipment(req, res, next) {
       });
 
       const openBookingIds = openBookings.map((b) => b.id);
-      const truckIds       = [...new Set(openBookings.map((b) => b.truckId))];
+      const truckIds = [...new Set(openBookings.map((b) => b.truckId))];
 
       if (openBookingIds.length > 0) {
         // Cancel all open bookings
@@ -271,55 +449,15 @@ async function runOptimization(req, res, next) {
 
       const top = results.results[0];
 
-      const [etaResult, fuelResult] = await Promise.all([
-        mlService.predictDeliveryTime({
-          weight_kg: shipment.weightKg,
-          distance_km: distanceKm,
-          truck_type: top.truckType,
-        }),
-        mlService.estimateFuel({
-          distance_km: distanceKm,
-          weight_kg: shipment.weightKg,
-          truck_type: top.truckType,
-        }),
-      ]);
-      const etaHours = etaResult?.predicted_hours ?? null;
-      const fuelLiters = fuelResult?.estimated_liters ?? null;
-      const co2Kg = mlService.estimateCo2(distanceKm, top.truckType);
-
-      predictions = [];
-      if (etaHours !== null) {
-        predictions.push({
-          shipmentId: shipment.id,
-          type: 'ETA_HOURS',
-          value: etaHours,
-          confidence: etaResult?.confidence ?? null,
-          modelVersion: getPredictionModelVersion(etaResult),
-        });
-      }
-      if (fuelLiters !== null) {
-        predictions.push({
-          shipmentId: shipment.id,
-          type: 'FUEL_ESTIMATE_LITERS',
-          value: fuelLiters,
-          confidence: fuelResult?.confidence ?? null,
-          modelVersion: getPredictionModelVersion(fuelResult),
-        });
-      }
-      if (co2Kg !== null) {
-        predictions.push({
-          shipmentId: shipment.id,
-          type: 'CO2_KG',
-          value: co2Kg,
-          modelVersion: 'derived-backend',
-        });
-      }
-      predictions.push({
-        shipmentId: shipment.id,
-        type: 'RECOMMENDED_TRUCK_SCORE',
-        value: top.score,
-        confidence: truckRecommendation?.confidence ?? null,
-        modelVersion: getPredictionModelVersion(truckRecommendation),
+      predictions = await buildMlPredictions({
+        shipment,
+        distanceKm,
+        truckType: top.truckType,
+        truckRecommendation: {
+          ...(truckRecommendation || {}),
+          confidence: truckRecommendation?.confidence ?? top.score,
+        },
+        requestId: req.id,
       });
 
       if (predictions.length > 0) {
@@ -329,10 +467,12 @@ async function runOptimization(req, res, next) {
       }
     }
 
-    const updatedShipment = await prisma.shipment.update({
-      where: { id: req.params.id },
-      data: { status: 'OPTIMIZED' },
-    });
+    const updatedShipment = results.results.length > 0
+      ? await prisma.shipment.update({
+        where: { id: req.params.id },
+        data: { status: 'OPTIMIZED' },
+      })
+      : shipment;
 
     logger.info(`Optimization complete for shipment ${shipment.id}`);
     emitShipmentPredictionsUpdated(io, {
@@ -373,6 +513,7 @@ module.exports = {
   createShipment,
   getMyShipments,
   getAllShipments,
+  getAvailableShipments,
   getShipment,
   cancelShipment,
   runOptimization,

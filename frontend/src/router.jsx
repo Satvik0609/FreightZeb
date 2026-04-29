@@ -11,7 +11,7 @@ const ShipmentDetailPage = lazy(() => import("./pages/ShipmentDetailPage"));
 const TrucksPage = lazy(() => import("./pages/TrucksPage"));
 const BookingsPage = lazy(() => import("./pages/BookingsPage"));
 const BookingDetailPage = lazy(() => import("./pages/BookingDetailPage"));
-const TrackingPage = lazy(() => import("./pages/TrackingPage"));
+const TrackingPage = lazy(() => import("./pages/TrackingPageFinal"));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
 const MlInsightsPage = lazy(() => import("./pages/MlInsightsPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
@@ -63,16 +63,16 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <Protected><DashboardPage /></Protected> },
-      { path: "shipments", element: <Protected roles={["ADMIN", "WAREHOUSE"]}><ShipmentsPage /></Protected> },
-      { path: "shipments/:id", element: <Protected roles={["ADMIN", "WAREHOUSE"]}><ShipmentDetailPage /></Protected> },
-      { path: "trucks", element: <Protected><TrucksPage /></Protected> },
+      { path: "shipments", element: <Protected roles={["ADMIN", "WAREHOUSE", "CARGO_DEALER"]}><ShipmentsPage /></Protected> },
+      { path: "shipments/:id", element: <Protected roles={["ADMIN", "WAREHOUSE", "CARGO_DEALER"]}><ShipmentDetailPage /></Protected> },
+      { path: "trucks", element: <Protected roles={["ADMIN", "DEALER", "CARGO_DEALER"]}><TrucksPage /></Protected> },
       { path: "bookings", element: <Protected><BookingsPage /></Protected> },
       { path: "bookings/:id", element: <Protected><BookingDetailPage /></Protected> },
       { path: "tracking", element: <Protected><TrackingPage /></Protected> },
       { path: "analytics", element: <Protected><AnalyticsPage /></Protected> },
       { path: "ml-insights", element: <Protected><MlInsightsPage /></Protected> },
       { path: "notifications", element: <Protected><NotificationsPage /></Protected> },
-      { path: "invoices", element: <Protected roles={["ADMIN", "WAREHOUSE"]}><InvoicesPage /></Protected> },
+      { path: "invoices", element: <Protected roles={["ADMIN", "WAREHOUSE", "CARGO_DEALER"]}><InvoicesPage /></Protected> },
       { path: "admin", element: <Protected roles={["ADMIN"]}><AdminPage /></Protected> },
     ],
   },

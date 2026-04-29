@@ -8,9 +8,9 @@ const { pushLocationRules, bookingIdParam } = require('../validators/trackingVal
 router.use(protect);
 
 // POST must come before /:bookingId to avoid route shadowing
-router.post('/update', restrictTo('DEALER', 'ADMIN'), pushLocationRules, validate, pushLocation);
+router.post('/push', restrictTo('DEALER', 'CARGO_DEALER', 'ADMIN'), pushLocationRules, validate, pushLocation);
 
-router.get('/:bookingId', bookingIdParam, validate, getTrackingHistory);
+router.get('/:bookingId/history', bookingIdParam, validate, getTrackingHistory);
 router.get('/:bookingId/latest', bookingIdParam, validate, getLatestLocation);
 
 module.exports = router;
