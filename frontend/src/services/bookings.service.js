@@ -2,6 +2,7 @@ import api from './api'
 
 export const bookingsService = {
   create: (data) => api.post('/bookings', data),
+  dealerAccept: (data) => api.post('/bookings/dealer-accept', data),
   getMy: () => api.get('/bookings/my'),
   getDealer: () => api.get('/bookings/dealer'),
   getAll: () => api.get('/bookings'),

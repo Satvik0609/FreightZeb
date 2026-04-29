@@ -13,4 +13,6 @@ export const mlService = {
   clusterShipments: (status = 'PENDING') =>
     api.get('/ml/cluster-shipments', { params: { status } }),
   optimizeCargo: (data) => api.post('/ml/optimize-cargo', data),
+  predictBooking: (bookingId) => api.post(`/ml/predict-booking/${bookingId}`),
+  predictBookingsBatch: (bookingIds) => api.post('/ml/predict-bookings/batch', { bookingIds }),
 }

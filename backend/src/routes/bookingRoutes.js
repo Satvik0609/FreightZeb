@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const {
-    createBooking, getMyBookings, getDealerBookings,
+    createBooking, dealerAcceptShipment, getMyBookings, getDealerBookings,
     getAllBookings, getBooking, updateBookingStatus,
 } = require('../controllers/bookingController');
 const { protect, restrictTo } = require('../middleware/authMiddleware');
@@ -12,6 +12,7 @@ router.use(protect);
 
 // Named paths before /:id
 router.post('/', restrictTo('WAREHOUSE', 'ADMIN'), createBookingRules, validate, createBooking);
+router.post('/dealer-accept', restrictTo('DEALER'), createBookingRules, validate, dealerAcceptShipment);
 router.get('/my', restrictTo('WAREHOUSE'), getMyBookings);
 router.get('/dealer', restrictTo('DEALER'), getDealerBookings);
 router.get('/', restrictTo('ADMIN'), getAllBookings);

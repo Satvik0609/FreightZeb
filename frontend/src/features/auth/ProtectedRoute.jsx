@@ -12,3 +12,10 @@ export function AdminRoute({ children }) {
   if (user?.role !== 'ADMIN') return <Navigate to="/" replace />
   return children
 }
+
+export function RoleRoute({ children, allowedRoles = [] }) {
+  const { user } = useAuthStore()
+  const isAllowed = allowedRoles.includes(user?.role)
+  if (!isAllowed) return <Navigate to="/" replace />
+  return children
+}

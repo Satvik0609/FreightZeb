@@ -3,6 +3,7 @@ import api from './api'
 export const trucksService = {
   create: (data) => api.post('/trucks', data),
   getMy: () => api.get('/trucks/my'),
+  getProfitOpportunities: () => api.get('/trucks/my/profit-opportunities'),
   getAvailable: () => api.get('/trucks/available'),
   getAll: () => api.get('/trucks'),
   getById: (id) => api.get(`/trucks/${id}`),

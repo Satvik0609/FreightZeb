@@ -10,6 +10,9 @@ const emailService = require('../services/emailService');
 const { asyncHandler } = require('../helpers/errors');
 const { parsePagination, paginatedResponse } = require('../helpers/pagination');
 const logger = require('../config/logger');
+const { prisma } = require('../config/db');
+const dealerMlAutomationService = require('../services/dealerMlAutomationService');
+const { queueMlPredictionJob } = require('../queues/mlQueue');
 
 // ── POST /api/bookings ───────────────────────────────────────────────────────
 const createBooking = asyncHandler(async (req, res) => {
@@ -39,6 +42,89 @@ const createBooking = asyncHandler(async (req, res) => {
     });
 
     res.status(201).json({ success: true, booking });
+});
+
+// ── POST /api/bookings/dealer-accept ─────────────────────────────────────────
+// Dealer accepts an open shipment opportunity using one of their trucks.
+const dealerAcceptShipment = asyncHandler(async (req, res) => {
+    const { shipmentId, truckId, notes } = req.body;
+
+    const [shipment, truck] = await Promise.all([
+        prisma.shipment.findUnique({
+            where: { id: shipmentId },
+            select: {
+                id: true,
+                warehouseId: true,
+                weightKg: true,
+                volumeM3: true,
+                status: true,
+                pickupLocation: true,
+                destination: true,
+            },
+        }),
+        prisma.truck.findUnique({
+            where: { id: truckId },
+            select: {
+                id: true,
+                dealerId: true,
+                capacityKg: true,
+                capacityM3: true,
+                status: true,
+                availability: true,
+            },
+        }),
+    ]);
+
+    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found' });
+    if (!truck) return res.status(404).json({ success: false, message: 'Truck not found' });
+    if (truck.dealerId !== req.user.id) return res.status(403).json({ success: false, message: 'Forbidden' });
+    if (shipment.status !== 'PENDING' && shipment.status !== 'OPTIMIZED') {
+        return res.status(400).json({ success: false, message: 'Shipment is not open for booking' });
+    }
+    if (truck.status !== 'AVAILABLE' || !truck.availability) {
+        return res.status(400).json({ success: false, message: 'Truck is not available' });
+    }
+    if (truck.capacityKg < shipment.weightKg) {
+        return res.status(400).json({ success: false, message: 'Truck capacity is insufficient for shipment weight' });
+    }
+    if (shipment.volumeM3 != null && truck.capacityM3 != null && truck.capacityM3 < shipment.volumeM3) {
+        return res.status(400).json({ success: false, message: 'Truck capacity is insufficient for shipment volume' });
+    }
+
+    const activeBooking = await prisma.booking.findFirst({
+        where: {
+            shipmentId,
+            status: { in: ['REQUESTED', 'APPROVED', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT'] },
+        },
+        select: { id: true },
+    });
+    if (activeBooking) {
+        return res.status(409).json({ success: false, message: 'Shipment is already booked' });
+    }
+
+    const booking = await bookingService.create({
+        shipmentId,
+        truckId,
+        warehouseId: shipment.warehouseId,
+        notes: notes || null,
+    });
+
+    const approved = await bookingService.transitionStatus({
+        bookingId: booking.id,
+        newStatus: 'APPROVED',
+        notes: notes || null,
+        userId: req.user.id,
+        userRole: req.user.role,
+    });
+
+    queueMlPredictionJob({ shipmentId, truckId, requestId: req.requestId })
+      .catch((e) => {
+        logger.warn(`Queue unavailable, running inline prediction generation: ${e.message}`);
+        return dealerMlAutomationService.generateShipmentTruckPredictions(shipmentId, truckId, req.requestId, req.app.get('io'));
+      })
+      .catch((e) => logger.warn(`Dealer ML automation failed after booking accept: ${e.message}`));
+
+    res.status(201).json({ success: true, booking: approved });
 });
 
 // ── GET /api/bookings/my ─────────────────────────────────────────────────────
@@ -188,6 +274,7 @@ async function _fireStatusSideEffects(io, booking, status) {
 
 module.exports = {
     createBooking,
+    dealerAcceptShipment,
     getMyBookings,
     getDealerBookings,
     getAllBookings,

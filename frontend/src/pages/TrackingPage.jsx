@@ -326,6 +326,13 @@ export default function TrackingPage() {
   const selectedTruckPos = selectedBooking?.truck?.id
     ? truckPositions[selectedBooking.truck.id]
     : null
+  const etaPrediction = selectedBooking?.shipment?.predictions?.find((p) => p.type === 'ETA_HOURS')
+  const lastGpsAgeMin = latestGpsPoint?.timestamp
+    ? (Date.now() - new Date(latestGpsPoint.timestamp).getTime()) / 60000
+    : null
+  const routeDeviation = routeInfo?.routePath?.length && selectedTruckPos
+    ? nearestPointIdx(routeInfo.routePath, selectedTruckPos.lat, selectedTruckPos.lng) < 2
+    : false
 
   const onMapLoad = useCallback((map) => { mapRef.current = map }, [])
 
@@ -361,6 +368,15 @@ export default function TrackingPage() {
         title="Live Tracking"
         subtitle="Real-time GPS tracking with Google Maps driving directions"
       />
+      {(lastGpsAgeMin && lastGpsAgeMin > 15) || routeDeviation ? (
+        <Card className="mb-4 border-amber-200 bg-amber-50 dark:bg-amber-900/20">
+          <p className="text-sm text-amber-700 dark:text-amber-300">
+            {lastGpsAgeMin && lastGpsAgeMin > 15 ? `No GPS update for ${Math.round(lastGpsAgeMin)} minutes.` : null}
+            {lastGpsAgeMin && lastGpsAgeMin > 15 && routeDeviation ? ' ' : null}
+            {routeDeviation ? 'Potential route deviation detected.' : null}
+          </p>
+        </Card>
+      ) : null}
 
       <div className="flex gap-4 h-[calc(100vh-200px)] min-h-[600px]">
         {/* ── Left panel: booking list ── */}
@@ -413,7 +429,10 @@ export default function TrackingPage() {
                   {isSelected && routeInfo && (
                     <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
                       <Navigation className="w-3 h-3" />
-                      <span>{routeInfo.distanceText} · {routeInfo.durationText}</span>
+                      <span>
+                        {routeInfo.distanceText} · {routeInfo.durationText}
+                        {etaPrediction?.value ? ` · ML ETA ${Number(etaPrediction.value).toFixed(1)}h` : ''}
+                      </span>
                     </div>
                   )}
 

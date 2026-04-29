@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Package, Truck, BookOpen, DollarSign, Users,
   AlertCircle, CheckCircle, Clock, Plus, ArrowRight, Activity,
-  AlertTriangle, ArrowUpRight, ArrowDownLeft, BarChart2, MapPin, Layers,
+  AlertTriangle, ArrowUpRight, ArrowDownLeft, BarChart2, MapPin, Layers, TrendingUp,
 } from 'lucide-react'
 import { PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import { useAuthStore } from '@/store/authStore'
@@ -15,7 +15,7 @@ import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/shared/StatusBadge'
 import Skeleton, { SkeletonCard } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, formatRelative } from '@/utils/formatters'
-import { normalizeAnalytics, normalizeBooking, normalizeShipment } from '@/utils/normalizers'
+import { normalizeAnalytics, normalizeBooking, normalizeShipment, normalizePrediction } from '@/utils/normalizers'
 
 const COLORS = ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899']
 
@@ -490,6 +490,13 @@ function DealerDashboard({ data, loading }) {
   const navigate = useNavigate()
   const stats = data?.stats || {}
   const pendingBookings = (data?.pendingBookings || []).map(normalizeBooking)
+  const bookingPredictions = pendingBookings.map((booking) => {
+    const preds = (booking.shipment?.predictions || []).map(normalizePrediction)
+    const delay = preds.find((p) => p.type === 'DELAY_RISK_PERCENT')
+    return { booking, delay }
+  }).filter((x) => x.delay).sort((a, b) => b.delay.value - a.delay.value)
+  const freshestPrediction = bookingPredictions[0]?.delay?.generatedAt || null
+  const freshnessText = freshestPrediction ? `${Math.round((Date.now() - new Date(freshestPrediction).getTime()) / 60000)}m ago` : 'No ML data'
 
   const fleetData = [
     { name: 'Available',    value: stats.availableTrucks || 0,    fill: '#10b981' },
@@ -502,8 +509,8 @@ function DealerDashboard({ data, loading }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard icon={Truck}     label="My Fleet"          value={stats.totalTrucks || 0}                   color="blue"   loading={loading} />
         <StatsCard icon={BookOpen}  label="Pending Requests"  value={stats.pendingBookings || 0}               color="amber"  loading={loading} />
-        <StatsCard icon={Activity}  label="Active Deliveries" value={stats.activeDeliveries || 0}              color="green"  loading={loading} />
-        <StatsCard icon={DollarSign} label="Revenue (Month)"  value={formatCurrency(stats.monthlyRevenue || 0)} color="purple" loading={loading} />
+        <StatsCard icon={Activity}  label="On Trip Trucks"    value={stats.onTripTrucks || 0}                  color="green"  loading={loading} />
+        <StatsCard icon={TrendingUp} label="Fleet Utilization" value={`${stats.fleetUtilization || 0}%`}       color="purple" loading={loading} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -548,6 +555,25 @@ function DealerDashboard({ data, loading }) {
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+          )}
+        </Card>
+        <Card>
+          <Card.Header>
+            <div>
+              <Card.Title>Top Risk Bookings</Card.Title>
+              <p className="text-xs text-gray-500 mt-0.5">ML updated {freshnessText}</p>
+            </div>
+          </Card.Header>
+          {loading ? <Skeleton lines={3} height="h-10" /> : (
+            <div className="space-y-2">
+              {bookingPredictions.slice(0, 3).map(({ booking, delay }) => (
+                <div key={booking.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">{booking.shipment?.origin} → {booking.shipment?.destinationLabel}</p>
+                  <p className="text-xs text-amber-600">{Number(delay.value).toFixed(1)}% risk {delay.fallback ? '• heuristic' : ''}</p>
+                </div>
+              ))}
+              {bookingPredictions.length === 0 && <p className="text-sm text-gray-400">No high-risk predictions yet.</p>}
+            </div>
           )}
         </Card>
       </div>

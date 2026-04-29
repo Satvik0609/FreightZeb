@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, Truck, MapPin, Edit, Trash2, Navigation } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { useNavigate } from 'react-router-dom'
 import { trucksService } from '@/services/trucks.service'
+import { bookingsService } from '@/services/bookings.service'
 import { useAuthStore } from '@/store/authStore'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -13,7 +15,7 @@ import StatusBadge from '@/components/shared/StatusBadge'
 import EmptyState from '@/components/shared/EmptyState'
 import PageHeader from '@/components/layout/PageHeader'
 import { SkeletonCard } from '@/components/ui/Skeleton'
-import { formatWeight, formatVolume } from '@/utils/formatters'
+import { formatWeight, formatVolume, formatCurrency, formatDistance } from '@/utils/formatters'
 import { TRUCK_TYPES, TRUCK_STATUS_OPTIONS } from '@/utils/constants'
 import { normalizeTruck } from '@/utils/normalizers'
 
@@ -111,6 +113,7 @@ function GPSUpdateModal({ truck, onClose }) {
 }
 
 export default function TrucksPage() {
+  const navigate = useNavigate()
   const { user } = useAuthStore()
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
@@ -128,6 +131,24 @@ export default function TrucksPage() {
     queryFn: () => isAdmin ? trucksService.getAll() : trucksService.getMy(),
     staleTime: 30 * 1000,
   })
+  const { data: opportunitiesData, isLoading: isOpportunitiesLoading } = useQuery({
+    queryKey: ['truck-profit-opportunities'],
+    queryFn: () => trucksService.getProfitOpportunities(),
+    enabled: isDealer,
+    staleTime: 30 * 1000,
+  })
+  const acceptMutation = useMutation({
+    mutationFn: ({ shipmentId, truckId }) => bookingsService.dealerAccept({ shipmentId, truckId }),
+    onSuccess: () => {
+      toast.success('Shipment accepted and moved to Bookings')
+      qc.invalidateQueries({ queryKey: ['trucks'] })
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['truck-profit-opportunities'] })
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      navigate('/bookings')
+    },
+    onError: (err) => toast.error(err.response?.data?.message || 'Failed to accept shipment'),
+  })
 
   const deleteMutation = useMutation({
     mutationFn: (id) => trucksService.delete(id),
@@ -141,6 +162,7 @@ export default function TrucksPage() {
     const matchType = !typeFilter || t.truckType === typeFilter
     return matchSearch && matchStatus && matchType
   })
+  const opportunities = opportunitiesData?.opportunities || []
 
   const typeColors = {
     SMALL_VAN: 'bg-blue-100 text-blue-700',
@@ -175,6 +197,52 @@ export default function TrucksPage() {
         <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} options={TRUCK_STATUS_OPTIONS} placeholder="All Statuses" className="w-40" />
         <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} options={TRUCK_TYPES} placeholder="All Types" className="w-44" />
       </div>
+
+      {isDealer && (
+        <Card className="mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Max Profit Shipment Opportunities</h3>
+            <span className="text-xs text-gray-500 dark:text-gray-400">Real-time from Prisma DB</span>
+          </div>
+          {isOpportunitiesLoading ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">Loading opportunities...</p>
+          ) : opportunities.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              No profitable open shipments currently match your available trucks.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {opportunities.slice(0, 5).map((item) => (
+                <div key={item.shipment.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium text-gray-900 dark:text-white">
+                      Shipment #{item.shipment.id.slice(0, 8)} - {item.bestMatch.registrationNo}
+                    </p>
+                    <p className="text-sm font-semibold text-green-600 dark:text-green-400">
+                      Profit: {formatCurrency(item.bestMatch.estimatedProfit)}
+                    </p>
+                  </div>
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs text-gray-600 dark:text-gray-300">
+                    <p>Weight: {formatWeight(item.shipment.weightKg)}</p>
+                    <p>Distance: {formatDistance(item.bestMatch.distanceKm)}</p>
+                    <p>Revenue: {formatCurrency(item.bestMatch.estimatedRevenue)}</p>
+                    <p>Cost: {formatCurrency(item.bestMatch.estimatedOperatingCost)}</p>
+                  </div>
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      size="sm"
+                      onClick={() => acceptMutation.mutate({ shipmentId: item.shipment.id, truckId: item.bestMatch.truckId })}
+                      loading={acceptMutation.isPending}
+                    >
+                      Accept Shipment
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {isLoading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

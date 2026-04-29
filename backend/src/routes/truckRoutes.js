@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const {
-    createTruck, getMyTrucks, getAllTrucks, getAvailableTrucks,
+    createTruck, getMyTrucks, getDealerProfitOpportunities, getAllTrucks, getAvailableTrucks,
     getTruck, updateTruck, updateTruckLocation, deleteTruck,
 } = require('../controllers/truckController');
 const { protect, restrictTo } = require('../middleware/authMiddleware');
@@ -13,6 +13,7 @@ router.use(protect);
 // Specific named paths BEFORE /:id
 router.post('/', restrictTo('DEALER', 'ADMIN'), createTruckRules, validate, createTruck);
 router.get('/my', restrictTo('DEALER'), getMyTrucks);
+router.get('/my/profit-opportunities', restrictTo('DEALER'), getDealerProfitOpportunities);
 router.get('/available', getAvailableTrucks);
 router.get('/', restrictTo('ADMIN'), getAllTrucks);
 

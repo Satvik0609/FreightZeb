@@ -202,58 +202,85 @@ function WarehouseAnalytics({ data, loading }) {
 
 function DealerAnalytics({ data, loading }) {
   const stats = data?.stats || data?.data || {}
-  const revenueData = data?.revenueByMonth || data?.data?.revenueByMonth || []
-  const deliveriesData = data?.deliveriesByMonth || data?.data?.deliveriesByMonth || []
+  const fleetData = data?.fleetUtilization || data?.data?.fleetUtilization || []
+  const typeData = data?.trucksByType || data?.data?.trucksByType || []
+  const trucksAddedData = data?.trucksAddedByMonth || data?.data?.trucksAddedByMonth || []
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard icon={DollarSign} label="Total Revenue" value={formatCurrency(stats.totalRevenue)} loading={loading} color="green" />
-        <MetricCard icon={Package} label="Deliveries" value={formatNumber(stats.completedDeliveries)} loading={loading} color="blue" />
         <MetricCard icon={Truck} label="Fleet Size" value={formatNumber(stats.totalTrucks)} loading={loading} color="amber" />
+        <MetricCard icon={Package} label="Available Trucks" value={formatNumber(stats.availableTrucks)} loading={loading} color="blue" />
+        <MetricCard icon={TrendingUp} label="On Trip Trucks" value={formatNumber(stats.onTripTrucks)} loading={loading} color="green" />
+        <MetricCard icon={Clock} label="Avg Price / Km" value={stats.avgPricePerKm != null ? formatCurrency(stats.avgPricePerKm) : '—'} loading={loading} color="purple" />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <MetricCard icon={Truck} label="Total Capacity (Kg)" value={formatNumber(stats.totalCapacityKg)} loading={loading} color="amber" />
         <MetricCard icon={TrendingUp} label="Utilization" value={formatPercent(stats.fleetUtilization)} loading={loading} color="purple" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <MetricCard icon={Clock} label="Avg Predicted ETA" value={stats.avgPredictedEtaHours != null ? `${stats.avgPredictedEtaHours}h` : '—'} loading={loading} color="blue" />
+        <MetricCard icon={TrendingUp} label="Avg Delay Risk" value={stats.avgDelayRiskPercent != null ? `${stats.avgDelayRiskPercent}%` : '—'} loading={loading} color="red" />
+        <MetricCard icon={Package} label="High-Risk Active Trips" value={formatNumber(stats.highRiskActiveTrips)} loading={loading} color="amber" />
+        <MetricCard icon={Truck} label="Fallback Share" value={stats.fallbackShare != null ? formatPercent(stats.fallbackShare * 100) : '—'} loading={loading} color="purple" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <Card.Header><Card.Title>Revenue Trend</Card.Title></Card.Header>
+          <Card.Header><Card.Title>Fleet Status Distribution</Card.Title></Card.Header>
           {loading ? <div className="h-56 animate-pulse bg-gray-100 dark:bg-gray-700 rounded-lg" /> : (
-            revenueData.length === 0 ? (
-              <ChartEmpty message="No revenue trend data yet." />
+            fleetData.length === 0 ? (
+              <ChartEmpty message="No fleet status data yet." />
             ) : (
               <ResponsiveContainer width="100%" height={220}>
-                <AreaChart data={revenueData}>
-                  <defs>
-                    <linearGradient id="revGrad2" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
+                <BarChart data={fleetData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${(v/1000).toFixed(0)}k`} />
-                  <Tooltip formatter={(v) => [formatCurrency(v), 'Revenue']} />
-                  <Area type="monotone" dataKey="revenue" stroke="#10b981" fill="url(#revGrad2)" strokeWidth={2} />
-                </AreaChart>
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#2563eb" radius={[4, 4, 0, 0]} />
+                </BarChart>
               </ResponsiveContainer>
             )
           )}
         </Card>
 
         <Card>
-          <Card.Header><Card.Title>Deliveries Completed</Card.Title></Card.Header>
+          <Card.Header><Card.Title>Fleet Composition by Truck Type</Card.Title></Card.Header>
           {loading ? <div className="h-56 animate-pulse bg-gray-100 dark:bg-gray-700 rounded-lg" /> : (
-            deliveriesData.length === 0 ? (
-              <ChartEmpty message="No delivery trend data yet." />
+            typeData.length === 0 ? (
+              <ChartEmpty message="No truck type composition data yet." />
             ) : (
               <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={deliveriesData}>
+                <PieChart>
+                  <Pie data={typeData} cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={3} dataKey="value">
+                    {typeData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            )
+          )}
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6">
+        <Card>
+          <Card.Header><Card.Title>Truck Onboarding Trend</Card.Title></Card.Header>
+          {loading ? <div className="h-56 animate-pulse bg-gray-100 dark:bg-gray-700 rounded-lg" /> : (
+            trucksAddedData.length === 0 ? (
+              <ChartEmpty message="No truck onboarding trend data yet." />
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={trucksAddedData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                   <Tooltip />
-                  <Bar dataKey="count" fill="#2563eb" radius={[4, 4, 0, 0]} />
-                </BarChart>
+                  <Line type="monotone" dataKey="count" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981', r: 3 }} />
+                </LineChart>
               </ResponsiveContainer>
             )
           )}

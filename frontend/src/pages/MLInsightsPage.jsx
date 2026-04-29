@@ -9,6 +9,7 @@ import 'leaflet/dist/leaflet.css'
 import { mlService } from '@/services/ml.service'
 import { shipmentsService } from '@/services/shipments.service'
 import { trucksService } from '@/services/trucks.service'
+import { bookingsService } from '@/services/bookings.service'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
 import Input from '@/components/ui/Input'
@@ -25,6 +26,94 @@ import {
 } from '@/utils/constants'
 import { useAuthStore } from '@/store/authStore'
 import { haversineKm, normalizeShipment, normalizeTruck } from '@/utils/normalizers'
+
+function DealerRidePredictions({ bookings }) {
+  const [refreshingBookingId, setRefreshingBookingId] = useState(null)
+  const [refreshingAll, setRefreshingAll] = useState(false)
+  const mutation = useMutation({
+    mutationFn: (bookingId) => mlService.predictBooking(bookingId),
+    onSettled: () => setRefreshingBookingId(null),
+  })
+
+  const activeBookings = bookings.filter((booking) =>
+    ['APPROVED', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'DELIVERED'].includes(booking.status)
+  )
+
+  const latestPrediction = (predictions, type) => predictions?.find((prediction) => prediction.type === type)
+
+  const handleRefreshAll = async () => {
+    if (activeBookings.length === 0) return
+    setRefreshingAll(true)
+    try {
+      await mlService.predictBookingsBatch(activeBookings.map((b) => b.id))
+    } finally {
+      setRefreshingAll(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button size="xs" variant="secondary" loading={refreshingAll} onClick={handleRefreshAll}>
+          Refresh All Active
+        </Button>
+      </div>
+      {activeBookings.length === 0 ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          No active/dealt rides yet. Predictions will auto-generate when you accept rides and add trucks.
+        </p>
+      ) : activeBookings.map((booking) => {
+        const predictions = booking.shipment?.predictions || []
+        const eta = latestPrediction(predictions, 'ETA_HOURS')
+        const delay = latestPrediction(predictions, 'DELAY_RISK_PERCENT')
+        const fuel = latestPrediction(predictions, 'FUEL_ESTIMATE_LITERS')
+        const co2 = latestPrediction(predictions, 'CO2_KG')
+
+        return (
+          <div key={booking.id} className="p-4 rounded-xl border border-gray-200 dark:border-gray-700">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <p className="font-medium text-gray-900 dark:text-white">
+                {booking.truck?.registrationNo || booking.truck?.registrationNumber || 'Truck'} - Booking #{booking.id.slice(-8)}
+              </p>
+              <Button
+                size="xs"
+                variant="secondary"
+                loading={refreshingBookingId === booking.id && mutation.isPending}
+                onClick={() => {
+                  setRefreshingBookingId(booking.id)
+                  mutation.mutate(booking.id)
+                }}
+              >
+                Refresh Predictions
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+              <div>
+                <p className="text-gray-500">ETA</p>
+                <p className="font-semibold text-gray-900 dark:text-white">{eta ? `${Number(eta.value).toFixed(1)} h` : '—'}</p>
+                {eta?.modelName && <p className="text-[11px] text-gray-500">{eta.modelName} {eta.fallback ? '(heuristic)' : ''}</p>}
+              </div>
+              <div>
+                <p className="text-gray-500">Delay Risk</p>
+                <p className="font-semibold text-gray-900 dark:text-white">{delay ? `${Number(delay.value).toFixed(1)}%` : '—'}</p>
+                {delay?.confidence != null && <p className="text-[11px] text-gray-500">conf {Math.round(delay.confidence * 100)}%</p>}
+              </div>
+              <div>
+                <p className="text-gray-500">Fuel</p>
+                <p className="font-semibold text-gray-900 dark:text-white">{fuel ? `${Number(fuel.value).toFixed(1)} L` : '—'}</p>
+                {fuel?.latencyMs != null && <p className="text-[11px] text-gray-500">{fuel.latencyMs}ms</p>}
+              </div>
+              <div>
+                <p className="text-gray-500">CO₂</p>
+                <p className="font-semibold text-gray-900 dark:text-white">{co2 ? `${Number(co2.value).toFixed(1)} kg` : '—'}</p>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 function FallbackBadge({ fallback }) {
   if (!fallback) return null
@@ -874,11 +963,45 @@ export default function MLInsightsPage() {
     staleTime: 60 * 1000,
     enabled: !!user,
   })
+  const { data: dealerBookingsData } = useQuery({
+    queryKey: ['dealer-bookings-for-ml'],
+    queryFn: () => bookingsService.getDealer(),
+    enabled: user?.role === 'DEALER',
+    staleTime: 30 * 1000,
+  })
 
   const shipments = (shipmentsData?.shipments || shipmentsData?.data || []).map(normalizeShipment).filter(
     (s) => ['PENDING', 'OPTIMIZED', 'BOOKED'].includes(s.status)
   )
   const trucks = (trucksData?.trucks || trucksData?.data || []).map(normalizeTruck)
+  const dealerBookings = dealerBookingsData?.bookings || []
+
+  if (user?.role === 'DEALER') {
+    return (
+      <div>
+        <PageHeader
+          title="ML Insights"
+          subtitle="Truck and ride focused predictions for dealers"
+        >
+          <div className="flex items-center gap-2 text-sm text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 px-3 py-1.5 rounded-lg border border-purple-200 dark:border-purple-700">
+            <Brain className="w-4 h-4" />
+            <span className="font-medium">Dealer ML Mode</span>
+          </div>
+        </PageHeader>
+        <Card>
+          <Card.Header>
+            <div>
+              <Card.Title>Ride Predictions</Card.Title>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Predictions are generated from your truck + accepted ride context.
+              </p>
+            </div>
+          </Card.Header>
+          <DealerRidePredictions bookings={dealerBookings} />
+        </Card>
+      </div>
+    )
+  }
 
   const tabs = [
     {

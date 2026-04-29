@@ -13,6 +13,7 @@ const TYPE_ICONS = {
   booking: Package,
   truck: Truck,
   alert: AlertTriangle,
+  ml: AlertTriangle,
   default: Info,
 }
 
@@ -20,6 +21,7 @@ const TYPE_COLORS = {
   booking: 'text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/20',
   truck: 'text-green-600 bg-green-50 dark:text-green-400 dark:bg-green-900/20',
   alert: 'text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/20',
+  ml: 'text-red-600 bg-red-50 dark:text-red-300 dark:bg-red-900/20',
   default: 'text-gray-600 bg-gray-50 dark:text-gray-400 dark:bg-gray-700',
 }
 
@@ -123,6 +125,8 @@ export default function NotificationsPage() {
                 ? 'truck'
                 : n.type?.toLowerCase()?.includes('alert')
                   ? 'alert'
+                  : n.type?.toLowerCase()?.includes('ml_')
+                    ? 'ml'
                   : 'default'
             const Icon = TYPE_ICONS[type] || TYPE_ICONS.default
             const colorClass = TYPE_COLORS[type] || TYPE_COLORS.default

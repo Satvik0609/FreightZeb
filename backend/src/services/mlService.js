@@ -41,6 +41,13 @@ const CIRCUIT = {
   halfOpenMs: 30_000,
 };
 
+const METRICS = {
+  calls: 0,
+  fallbackCalls: 0,
+  failures: 0,
+  byEndpoint: {},
+};
+
 function isCircuitOpen() {
   if (!CIRCUIT.openedAt) return false;
   if (Date.now() - CIRCUIT.openedAt > CIRCUIT.halfOpenMs) {
@@ -68,6 +75,7 @@ function recordFailure() {
 async function _post(endpoint, body, requestId, timeoutMs = TIMEOUT_MS) {
   if (isCircuitOpen()) throw new Error('ML circuit breaker is open — skipping call');
 
+  const startedAt = Date.now();
   try {
     const res = await axios.post(`${ML_URL}${endpoint}`, body, {
       timeout: timeoutMs,
@@ -78,9 +86,11 @@ async function _post(endpoint, body, requestId, timeoutMs = TIMEOUT_MS) {
       },
     });
     recordSuccess();
+    _recordMetrics(endpoint, { fallback: false, failed: false, latencyMs: Date.now() - startedAt });
     return res.data;
   } catch (err) {
     recordFailure();
+    _recordMetrics(endpoint, { fallback: false, failed: true, latencyMs: Date.now() - startedAt });
     throw err;
   }
 }
@@ -142,6 +152,20 @@ function _clusterFallback(shipments) {
   };
 }
 
+function _recordMetrics(endpoint, { fallback, failed, latencyMs }) {
+  METRICS.calls += 1;
+  if (fallback) METRICS.fallbackCalls += 1;
+  if (failed) METRICS.failures += 1;
+  if (!METRICS.byEndpoint[endpoint]) {
+    METRICS.byEndpoint[endpoint] = { calls: 0, fallbackCalls: 0, failures: 0, totalLatencyMs: 0 };
+  }
+  const metric = METRICS.byEndpoint[endpoint];
+  metric.calls += 1;
+  metric.totalLatencyMs += Number(latencyMs || 0);
+  if (fallback) metric.fallbackCalls += 1;
+  if (failed) metric.failures += 1;
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 class MLService {
   /** Unified dispatcher — mirrors the FastAPI /predict endpoint. */
@@ -168,22 +192,26 @@ class MLService {
   }
 
   async predictTruckRecommendation(data, requestId) {
+    const startedAt = Date.now();
     try {
       const res = await _post('/predict-truck', data, requestId);
-      return { ...res, fallback: false };
+      return { ...res, fallback: false, source: 'ml_service', model_name: 'truck_recommendation', latency_ms: Date.now() - startedAt };
     } catch (err) {
       logger.warn(`ML truck recommendation failed: ${err.message}`);
-      return _truckFallback(data);
+      _recordMetrics('/predict-truck', { fallback: true, failed: false, latencyMs: Date.now() - startedAt });
+      return { ..._truckFallback(data), model_name: 'truck_recommendation', latency_ms: Date.now() - startedAt };
     }
   }
 
   async predictDeliveryTime(data, requestId) {
+    const startedAt = Date.now();
     try {
       const res = await _post('/predict-delivery-time', data, requestId);
-      return { ...res, fallback: false };
+      return { ...res, fallback: false, source: 'ml_service', model_name: 'delivery_eta', latency_ms: Date.now() - startedAt };
     } catch (err) {
       logger.warn(`ML delivery prediction failed: ${err.message}`);
-      return _deliveryFallback(data);
+      _recordMetrics('/predict-delivery-time', { fallback: true, failed: false, latencyMs: Date.now() - startedAt });
+      return { ..._deliveryFallback(data), model_name: 'delivery_eta', latency_ms: Date.now() - startedAt };
     }
   }
 
@@ -198,17 +226,20 @@ class MLService {
   }
 
   async predictDelayRisk(data, requestId) {
+    const startedAt = Date.now();
     const res = await _post('/predict-delay-risk', data, requestId);
-    return { ...res, fallback: false };
+    return { ...res, fallback: false, source: 'ml_service', model_name: 'delay_risk', latency_ms: Date.now() - startedAt };
   }
 
   async estimateFuel(data, requestId) {
+    const startedAt = Date.now();
     try {
       const res = await _post('/estimate-fuel', data, requestId);
-      return { ...res, fallback: false };
+      return { ...res, fallback: false, source: 'ml_service', model_name: 'fuel_estimation', latency_ms: Date.now() - startedAt };
     } catch (err) {
       logger.warn(`ML fuel estimation failed: ${err.message}`);
-      return _fuelFallback(data);
+      _recordMetrics('/estimate-fuel', { fallback: true, failed: false, latencyMs: Date.now() - startedAt });
+      return { ..._fuelFallback(data), model_name: 'fuel_estimation', latency_ms: Date.now() - startedAt };
     }
   }
 
@@ -234,6 +265,27 @@ class MLService {
       open: isCircuitOpen(),
       failures: CIRCUIT.failures,
       openedAt: CIRCUIT.openedAt,
+    };
+  }
+
+  getMetricsSummary() {
+    const byEndpoint = Object.fromEntries(
+      Object.entries(METRICS.byEndpoint).map(([endpoint, metric]) => [
+        endpoint,
+        {
+          calls: metric.calls,
+          failures: metric.failures,
+          fallbackCalls: metric.fallbackCalls,
+          avgLatencyMs: metric.calls ? Number((metric.totalLatencyMs / metric.calls).toFixed(1)) : 0,
+        },
+      ]),
+    );
+    return {
+      calls: METRICS.calls,
+      failures: METRICS.failures,
+      fallbackCalls: METRICS.fallbackCalls,
+      fallbackRate: METRICS.calls ? Number((METRICS.fallbackCalls / METRICS.calls).toFixed(3)) : 0,
+      byEndpoint,
     };
   }
 }

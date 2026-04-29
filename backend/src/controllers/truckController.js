@@ -1,6 +1,54 @@
 const { prisma } = require('../config/db');
 const logger = require('../config/logger');
 const { parsePagination } = require('../helpers/pagination');
+const { calculateRoute } = require('../services/routeService');
+const pricingService = require('../services/pricingService');
+const dealerMlAutomationService = require('../services/dealerMlAutomationService');
+const { queueNewTruckAutomation } = require('../queues/mlQueue');
+
+const ACTIVE_BOOKING_STATUSES = ['REQUESTED', 'APPROVED', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT'];
+
+const OPERATING_COST_PER_KM = {
+  SMALL_VAN: 8,
+  CONTAINER_20FT: 19,
+  CONTAINER_32FT: 25,
+  FLATBED_TRAILER: 28,
+  REEFER: 35,
+};
+
+function toNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasValidCoordinates(location) {
+  if (!location) return false;
+  const lat = toNumber(location.lat);
+  const lng = toNumber(location.lng);
+  return lat !== null && lng !== null;
+}
+
+function routeText(location) {
+  if (!location || typeof location !== 'object') return '';
+  return [location.city, location.address].filter(Boolean).join(' ').toLowerCase();
+}
+
+function isRouteCompatible(truck, shipment) {
+  const from = String(truck.routeFrom || '').toLowerCase();
+  const to = String(truck.routeTo || '').toLowerCase();
+  if (!from && !to) return true;
+
+  const pickupText = routeText(shipment.pickupLocation);
+  const destinationText = routeText(shipment.destination);
+  const fromOk = !from || pickupText.includes(from);
+  const toOk = !to || destinationText.includes(to);
+  return fromOk && toOk;
+}
+
+function estimateOperatingCost(distanceKm, truckType) {
+  const rate = OPERATING_COST_PER_KM[truckType] || 22;
+  return Number((distanceKm * rate).toFixed(2));
+}
 
 // Dealer: add truck
 async function createTruck(req, res, next) {
@@ -23,6 +71,12 @@ async function createTruck(req, res, next) {
     });
 
     logger.info(`Truck added: ${truck.registrationNo} by dealer ${req.user.id}`);
+    queueNewTruckAutomation({ truckId: truck.id, dealerId: req.user.id, requestId: req.requestId })
+      .catch((e) => {
+        logger.warn(`Queue unavailable, running inline truck automation: ${e.message}`);
+        return dealerMlAutomationService.generateForNewTruck(truck.id, req.user.id, req.requestId);
+      })
+      .catch((e) => logger.warn(`Dealer ML automation failed after truck add: ${e.message}`));
     res.status(201).json({ success: true, truck });
   } catch (err) {
     if (err.code === 'P2002') {
@@ -51,6 +105,108 @@ async function getMyTrucks(req, res, next) {
     ]);
 
     res.json({ success: true, total, page: Number(page), limit: Number(limit), trucks });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Dealer: list best-profit shipment opportunities using live Prisma data.
+async function getDealerProfitOpportunities(req, res, next) {
+  try {
+    const [dealerTrucks, openShipments] = await Promise.all([
+      prisma.truck.findMany({
+        where: { dealerId: req.user.id, status: 'AVAILABLE', availability: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.shipment.findMany({
+        where: {
+          status: { in: ['PENDING', 'OPTIMIZED'] },
+          bookings: {
+            none: { status: { in: ACTIVE_BOOKING_STATUSES } },
+          },
+        },
+        select: {
+          id: true,
+          weightKg: true,
+          volumeM3: true,
+          pickupLocation: true,
+          destination: true,
+          deadline: true,
+          description: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    if (dealerTrucks.length === 0) {
+      return res.json({ success: true, opportunities: [], meta: { trucksConsidered: 0, shipmentsConsidered: openShipments.length } });
+    }
+
+    const opportunities = [];
+
+    for (const shipment of openShipments) {
+      if (!hasValidCoordinates(shipment.pickupLocation) || !hasValidCoordinates(shipment.destination)) continue;
+
+      const { distanceKm } = calculateRoute(shipment.pickupLocation, shipment.destination);
+      let best = null;
+
+      for (const truck of dealerTrucks) {
+        const weightOk = truck.capacityKg >= shipment.weightKg;
+        const volumeOk = shipment.volumeM3 == null || truck.capacityM3 == null || truck.capacityM3 >= shipment.volumeM3;
+        if (!weightOk || !volumeOk || !isRouteCompatible(truck, shipment)) continue;
+
+        const pricing = pricingService.calculate({
+          distanceKm,
+          weightKg: shipment.weightKg,
+          truckType: truck.truckType,
+          dealerPricePerKm: truck.pricePerKm,
+        });
+        const operatingCost = estimateOperatingCost(distanceKm, truck.truckType);
+        const estimatedProfit = Number((pricing.total - operatingCost).toFixed(2));
+
+        if (!best || estimatedProfit > best.estimatedProfit) {
+          best = {
+            truckId: truck.id,
+            registrationNo: truck.registrationNo,
+            truckType: truck.truckType,
+            distanceKm: pricing.distanceKm,
+            estimatedRevenue: pricing.total,
+            estimatedOperatingCost: operatingCost,
+            estimatedProfit,
+            pricing,
+          };
+        }
+      }
+
+      if (best) {
+        opportunities.push({
+          shipment: {
+            id: shipment.id,
+            weightKg: shipment.weightKg,
+            volumeM3: shipment.volumeM3,
+            pickupLocation: shipment.pickupLocation,
+            destination: shipment.destination,
+            deadline: shipment.deadline,
+            description: shipment.description,
+            status: shipment.status,
+          },
+          bestMatch: best,
+        });
+      }
+    }
+
+    opportunities.sort((a, b) => b.bestMatch.estimatedProfit - a.bestMatch.estimatedProfit);
+    res.json({
+      success: true,
+      opportunities,
+      meta: {
+        trucksConsidered: dealerTrucks.length,
+        shipmentsConsidered: openShipments.length,
+        profitableMatches: opportunities.length,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -207,6 +363,7 @@ async function deleteTruck(req, res, next) {
 module.exports = {
   createTruck,
   getMyTrucks,
+  getDealerProfitOpportunities,
   getAllTrucks,
   getAvailableTrucks,
   getTruck,

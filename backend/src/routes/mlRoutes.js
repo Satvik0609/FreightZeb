@@ -17,6 +17,8 @@ const {
   optimizeCargo,
   getMlHealth,
   getModelsInfo,
+  predictForBooking,
+  predictForBookingsBatch,
 } = require('../controllers/mlController');
 
 const { protect } = require('../middleware/authMiddleware');
@@ -64,5 +66,7 @@ router.get('/estimate-fuel', estimateFuelRules, validate, estimateFuel);
 // POST /api/ml/optimize-cargo
 // Body: { truck_capacity_kg, truck_capacity_m3, items: [...] }
 router.post('/optimize-cargo', optimizeCargoRules, validate, optimizeCargo);
+router.post('/predict-booking/:bookingId', predictForBooking);
+router.post('/predict-bookings/batch', predictForBookingsBatch);
 
 module.exports = router;

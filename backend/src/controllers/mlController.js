@@ -7,6 +7,8 @@ const mlService = require('../services/mlService');
 const { prisma } = require('../config/db');
 const { asyncHandler, AppError } = require('../helpers/errors');
 const logger = require('../config/logger');
+const dealerMlAutomationService = require('../services/dealerMlAutomationService');
+const { queueMlPredictionJob } = require('../queues/mlQueue');
 
 function _haversineKm(from, to) {
   const toNum = (value) => {
@@ -59,6 +61,7 @@ const getMlHealth = asyncHandler(async (req, res) => {
     res.json({
       success: true,
       circuit: mlService.getCircuitStatus(),
+      metrics: mlService.getMetricsSummary(),
       health: health.status === 'fulfilled' ? health.value : { error: health.reason?.message },
       readyz: readyz.status === 'fulfilled' ? readyz.value : { error: readyz.reason?.message },
     });
@@ -132,6 +135,9 @@ const predictDeliveryTime = asyncHandler(async (req, res) => {
         value: result.predicted_hours ?? 0,
         confidence: result.confidence ?? null,
         modelVersion: result.fallback ? 'fallback' : '2.1.0',
+        modelName: result.model_name || 'delivery_eta',
+        source: result.fallback ? 'heuristic' : (result.source || 'ml_service'),
+        latencyMs: result.latency_ms ?? null,
       },
     }),
   ]);
@@ -240,6 +246,9 @@ const predictDelayRisk = asyncHandler(async (req, res) => {
         value: result.delay_probability ?? 0,
         confidence: result.confidence ?? null,
         modelVersion: result.fallback ? 'fallback' : '2.1.0',
+        modelName: result.model_name || 'delay_risk',
+        source: result.fallback ? 'heuristic' : (result.source || 'ml_service'),
+        latencyMs: result.latency_ms ?? null,
       },
     }),
   ]);
@@ -280,6 +289,66 @@ const optimizeCargo = asyncHandler(async (req, res) => {
   }
 });
 
+// ── Refresh predictions for an existing booking (dealer-centric) ─────────────
+const predictForBooking = asyncHandler(async (req, res) => {
+  const booking = await prisma.booking.findUnique({
+    where: { id: req.params.bookingId },
+    select: { id: true, shipmentId: true, truckId: true, warehouseId: true, dealerId: true },
+  });
+  if (!booking) throw AppError.notFound('Booking not found');
+
+  const allowed =
+    req.user.role === 'ADMIN' ||
+    (req.user.role === 'DEALER' && booking.dealerId === req.user.id) ||
+    (req.user.role === 'WAREHOUSE' && booking.warehouseId === req.user.id);
+  if (!allowed) throw AppError.forbidden();
+
+  await queueMlPredictionJob({
+    shipmentId: booking.shipmentId,
+    truckId: booking.truckId,
+    requestId: req.requestId,
+  }).catch(() => dealerMlAutomationService.generateShipmentTruckPredictions(
+    booking.shipmentId,
+    booking.truckId,
+    req.requestId,
+    req.app.get('io'),
+  ));
+
+  const predictions = await prisma.prediction.findMany({
+    where: {
+      shipmentId: booking.shipmentId,
+      type: { in: ['ETA_HOURS', 'DELAY_RISK_PERCENT', 'FUEL_ESTIMATE_LITERS', 'CO2_KG'] },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  res.json({ success: true, bookingId: booking.id, shipmentId: booking.shipmentId, predictions });
+});
+
+const predictForBookingsBatch = asyncHandler(async (req, res) => {
+  const bookingIds = Array.isArray(req.body?.bookingIds) ? req.body.bookingIds : [];
+  if (bookingIds.length === 0) throw AppError.badRequest('bookingIds is required');
+  const bookings = await prisma.booking.findMany({
+    where: { id: { in: bookingIds } },
+    select: { id: true, shipmentId: true, truckId: true, warehouseId: true, dealerId: true },
+  });
+  const allowed = bookings.filter((booking) =>
+    req.user.role === 'ADMIN' ||
+    (req.user.role === 'DEALER' && booking.dealerId === req.user.id) ||
+    (req.user.role === 'WAREHOUSE' && booking.warehouseId === req.user.id));
+  await Promise.allSettled(allowed.map((booking) => queueMlPredictionJob({
+    shipmentId: booking.shipmentId,
+    truckId: booking.truckId,
+    requestId: req.requestId,
+  }).catch(() => dealerMlAutomationService.generateShipmentTruckPredictions(
+    booking.shipmentId,
+    booking.truckId,
+    req.requestId,
+    req.app.get('io'),
+  ))));
+  res.json({ success: true, queued: allowed.length, requested: bookingIds.length });
+});
+
 // ── Shared helper ─────────────────────────────────────────────────────────────
 async function _getShipmentOrThrow(shipmentId, user) {
   const shipment = await prisma.shipment.findUnique({
@@ -314,4 +383,6 @@ module.exports = {
   predictDelayRisk,
   estimateFuel,
   optimizeCargo,
+  predictForBooking,
+  predictForBookingsBatch,
 };

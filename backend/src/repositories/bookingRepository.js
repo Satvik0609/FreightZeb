@@ -51,7 +51,7 @@ async function findByDealer(dealerId, { status, skip, limit }) {
         prisma.booking.findMany({
             where,
             include: {
-                shipment: true,
+                shipment: { include: { predictions: true } },
                 truck: true,
                 warehouse: { select: { id: true, name: true, email: true, company: true } },
             },

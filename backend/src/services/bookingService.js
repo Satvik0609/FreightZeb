@@ -132,8 +132,25 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
     }
 
     if (newStatus === 'DELIVERED') {
+      const deliveredAt = new Date();
+      const pickedAt = booking.pickedUpAt ? new Date(booking.pickedUpAt) : null;
+      const actualDurationHours = pickedAt ? Number(((deliveredAt.getTime() - pickedAt.getTime()) / (1000 * 60 * 60)).toFixed(2)) : null;
+      const fuelPrediction = await tx.prediction.findFirst({
+        where: { shipmentId: booking.shipmentId, type: 'FUEL_ESTIMATE_LITERS' },
+        orderBy: { createdAt: 'desc' },
+        select: { value: true },
+      });
       const invoiceNo = `INV-${Date.now()}`;
       await Promise.all([
+        tx.booking.update({
+          where: { id: bookingId },
+          data: {
+            deliveredAt,
+            actualDurationHours,
+            actualDistanceKm: booking.distanceKm ?? null,
+            actualFuelLiters: fuelPrediction?.value ?? null,
+          },
+        }),
         tx.truck.update({ where: { id: booking.truckId }, data: { status: 'AVAILABLE', availability: true } }),
         tx.shipment.update({ where: { id: booking.shipmentId }, data: { status: 'DELIVERED' } }),
         tx.invoice.create({

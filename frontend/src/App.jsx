@@ -4,7 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import { queryClient } from '@/lib/queryClient'
 import { useThemeStore } from '@/store/themeStore'
-import ProtectedRoute, { AdminRoute } from '@/features/auth/ProtectedRoute'
+import ProtectedRoute, { AdminRoute, RoleRoute } from '@/features/auth/ProtectedRoute'
 import Layout from '@/components/layout/Layout'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 
@@ -66,10 +66,14 @@ export default function App() {
                   <Suspense fallback={<PageLoader />}><DashboardPage /></Suspense>
                 } />
                 <Route path="/shipments" element={
-                  <Suspense fallback={<PageLoader />}><ShipmentsPage /></Suspense>
+                  <RoleRoute allowedRoles={['ADMIN', 'WAREHOUSE']}>
+                    <Suspense fallback={<PageLoader />}><ShipmentsPage /></Suspense>
+                  </RoleRoute>
                 } />
                 <Route path="/shipments/:id" element={
-                  <Suspense fallback={<PageLoader />}><ShipmentDetailPage /></Suspense>
+                  <RoleRoute allowedRoles={['ADMIN', 'WAREHOUSE']}>
+                    <Suspense fallback={<PageLoader />}><ShipmentDetailPage /></Suspense>
+                  </RoleRoute>
                 } />
                 <Route path="/trucks" element={
                   <Suspense fallback={<PageLoader />}><TrucksPage /></Suspense>
@@ -93,7 +97,9 @@ export default function App() {
                   <Suspense fallback={<PageLoader />}><NotificationsPage /></Suspense>
                 } />
                 <Route path="/invoices" element={
-                  <Suspense fallback={<PageLoader />}><InvoicesPage /></Suspense>
+                  <RoleRoute allowedRoles={['ADMIN', 'WAREHOUSE']}>
+                    <Suspense fallback={<PageLoader />}><InvoicesPage /></Suspense>
+                  </RoleRoute>
                 } />
                 <Route path="/admin/users" element={
                   <AdminRoute>

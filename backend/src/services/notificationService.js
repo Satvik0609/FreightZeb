@@ -19,6 +19,9 @@ const TYPE_CONFIG = {
     TRIP_COMPLETED: { priority: 'info' },
     INVOICE_CREATED: { priority: 'info' },
     DELAY_ALERT: { priority: 'critical' },
+    ML_DELAY_RISK_CRITICAL: { priority: 'critical' },
+    ML_STALE_PREDICTION: { priority: 'warning' },
+    ML_TRACKING_ANOMALY: { priority: 'warning' },
 };
 
 function _buildActionUrl(meta = {}) {
@@ -185,6 +188,16 @@ async function invoiceCreated(io, { warehouseId, bookingId, invoiceId }) {
     });
 }
 
+async function mlStalePrediction(io, { userId, bookingId, shipmentId, ageMinutes }) {
+    return send(io, {
+        userId,
+        type: 'ML_STALE_PREDICTION',
+        title: 'Prediction Refresh Recommended',
+        message: `Prediction for booking ${String(bookingId).slice(-8)} is ${ageMinutes}m old.`,
+        meta: { bookingId, shipmentId, ageMinutes, impact: 'medium' },
+    });
+}
+
 module.exports = {
     send,
     toClientNotification,
@@ -197,4 +210,5 @@ module.exports = {
     shipmentCancelled,
     shipmentDelivered,
     invoiceCreated,
+    mlStalePrediction,
 };

@@ -143,6 +143,9 @@ model Booking {
   estimatedEta    DateTime?
   pickedUpAt      DateTime?
   deliveredAt     DateTime?
+  actualDurationHours Float?
+  actualFuelLiters Float?
+  actualDistanceKm Float?
   notes           String?
   proofOfDelivery Json?         // { photos: [url], signature: url, notes: string, submittedAt: DateTime }
   createdAt       DateTime      @default(now())
@@ -261,6 +264,10 @@ model Prediction {
   value        Float
   confidence   Float?
   modelVersion String?
+  modelName    String?
+  source       String?
+  latencyMs    Int?
+  explanation  Json?
   createdAt    DateTime       @default(now())
 
   shipment Shipment @relation(fields: [shipmentId], references: [id])

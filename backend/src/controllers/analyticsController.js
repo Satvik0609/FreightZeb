@@ -145,55 +145,84 @@ async function getDealerAnalytics(req, res, next) {
         const [
             totalTrucks,
             trucksByStatus,
-            bookingsByStatus,
-            deliveredBookings,
-            deliveredRevenueRows,
+            trucksByType,
+            truckRows,
+            dealerPredictions,
+            dealerBookings,
         ] = await Promise.all([
             prisma.truck.count({ where: { dealerId } }),
             prisma.truck.groupBy({ by: ['status'], where: { dealerId }, _count: true }),
-            prisma.booking.groupBy({ by: ['status'], where: { dealerId }, _count: true }),
-            prisma.booking.findMany({
-                where: { dealerId, status: 'DELIVERED' },
-                select: { distanceKm: true, optimScore: true, deliveredAt: true, pricing: true, invoice: { select: { pricing: true } } },
+            prisma.truck.groupBy({ by: ['truckType'], where: { dealerId }, _count: true }),
+            prisma.truck.findMany({
+                where: { dealerId },
+                select: { createdAt: true, capacityKg: true, capacityM3: true, pricePerKm: true },
+            }),
+            prisma.prediction.findMany({
+                where: {
+                    shipment: {
+                        bookings: { some: { dealerId } },
+                    },
+                    type: { in: ['ETA_HOURS', 'DELAY_RISK_PERCENT', 'FUEL_ESTIMATE_LITERS'] },
+                },
+                orderBy: { createdAt: 'desc' },
+                select: { shipmentId: true, type: true, value: true, source: true, createdAt: true },
             }),
             prisma.booking.findMany({
-                where: { dealerId, status: 'DELIVERED' },
-                select: { deliveredAt: true, pricing: true, invoice: { select: { pricing: true } } },
+                where: { dealerId, status: { in: ['APPROVED', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT'] } },
+                select: { id: true, shipmentId: true },
             }),
         ]);
 
-        const totalKm = deliveredBookings.reduce((s, b) => s + (b.distanceKm || 0), 0);
-        const avgScore = deliveredBookings.length
-            ? deliveredBookings.reduce((s, b) => s + (b.optimScore || 0), 0) / deliveredBookings.length
-            : null;
+        const byStatusMap = Object.fromEntries(trucksByStatus.map((t) => [t.status, t._count._all]));
+        const byTypeMap = Object.fromEntries(trucksByType.map((t) => [t.truckType, t._count._all]));
 
         // Fleet utilization = trucks not AVAILABLE / total
-        const availableCount = trucksByStatus.find((t) => t.status === 'AVAILABLE')?._count?._all || 0;
+        const availableCount = byStatusMap.AVAILABLE || 0;
         const utilizationPct = totalTrucks > 0 ? parseFloat((((totalTrucks - availableCount) / totalTrucks) * 100).toFixed(1)) : 0;
 
-        const deliveriesByMonth = seriesFromRecords(deliveredBookings, months, {
-            dateKey: 'deliveredAt',
+        const trucksAddedByMonth = seriesFromRecords(truckRows, months, {
+            dateKey: 'createdAt',
             valueGetter: () => 1,
             valueKey: 'count',
         });
-        const revenueByMonth = seriesFromRecords(deliveredRevenueRows, months, {
-            dateKey: 'deliveredAt',
-            valueGetter: bookingRevenue,
-            valueKey: 'revenue',
-        });
+
+        const totalCapacityKg = truckRows.reduce((sum, t) => sum + (t.capacityKg || 0), 0);
+        const totalCapacityM3 = truckRows.reduce((sum, t) => sum + (t.capacityM3 || 0), 0);
+        const avgPricePerKmRaw = truckRows
+            .filter((t) => t.pricePerKm !== null && t.pricePerKm !== undefined)
+            .map((t) => Number(t.pricePerKm));
+        const avgPricePerKm = avgPricePerKmRaw.length
+            ? parseFloat((avgPricePerKmRaw.reduce((s, n) => s + n, 0) / avgPricePerKmRaw.length).toFixed(2))
+            : null;
+
+        const activeShipmentIds = new Set(dealerBookings.map((b) => b.shipmentId));
+        const delayPredictions = dealerPredictions.filter((p) => p.type === 'DELAY_RISK_PERCENT');
+        const activeDelayPredictions = delayPredictions.filter((p) => activeShipmentIds.has(p.shipmentId));
+        const etaPredictions = dealerPredictions.filter((p) => p.type === 'ETA_HOURS');
+        const fallbackShare = dealerPredictions.length
+            ? Number((dealerPredictions.filter((p) => p.source === 'heuristic').length / dealerPredictions.length).toFixed(3))
+            : 0;
+        const freshnessMinutes = dealerPredictions.length
+            ? Number(((Date.now() - new Date(dealerPredictions[0].createdAt).getTime()) / 60000).toFixed(1))
+            : null;
 
         res.json({
             success: true,
             analytics: {
                 totalTrucks,
-                trucksByStatus: Object.fromEntries(trucksByStatus.map((t) => [t.status, t._count._all])),
-                bookingsByStatus: Object.fromEntries(bookingsByStatus.map((b) => [b.status, b._count._all])),
-                totalDeliveredKm: parseFloat(totalKm.toFixed(2)),
-                avgOptimizationScore: avgScore ? parseFloat(avgScore.toFixed(3)) : null,
+                trucksByStatus: byStatusMap,
+                trucksByType: byTypeMap,
                 fleetUtilizationPct: utilizationPct,
+                totalCapacityKg: parseFloat(totalCapacityKg.toFixed(2)),
+                totalCapacityM3: parseFloat(totalCapacityM3.toFixed(2)),
+                avgPricePerKm,
+                avgPredictedEtaHours: etaPredictions.length ? Number((etaPredictions.reduce((s, p) => s + p.value, 0) / etaPredictions.length).toFixed(2)) : null,
+                avgDelayRiskPercent: delayPredictions.length ? Number((delayPredictions.reduce((s, p) => s + p.value, 0) / delayPredictions.length).toFixed(2)) : null,
+                highRiskActiveTrips: activeDelayPredictions.filter((p) => p.value >= 70).length,
+                predictionFreshnessMinutes: freshnessMinutes,
+                fallbackShare,
             },
-            revenueByMonth,
-            deliveriesByMonth,
+            trucksAddedByMonth,
         });
     } catch (err) {
         next(err);

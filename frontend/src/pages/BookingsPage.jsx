@@ -14,7 +14,7 @@ import { SkeletonTable } from '@/components/ui/Skeleton'
 import Table from '@/components/ui/Table'
 import { formatCurrency, formatRelative } from '@/utils/formatters'
 import { BOOKING_STATUSES } from '@/utils/constants'
-import { normalizeBooking } from '@/utils/normalizers'
+import { normalizeBooking, normalizePrediction } from '@/utils/normalizers'
 
 const STATUS_STEP_MAP = {
   REQUESTED: 0, APPROVED: 1, ASSIGNED: 2, PICKED_UP: 3, IN_TRANSIT: 4, DELIVERED: 5, REJECTED: -1, CANCELLED: -1
@@ -78,6 +78,24 @@ export default function BookingsPage() {
   })
 
   const columns = [
+    {
+      key: 'ml', label: 'ML', render: (_, row) => {
+        const preds = (row.shipment?.predictions || []).map(normalizePrediction)
+        const eta = preds.find((p) => p.type === 'ETA_HOURS')
+        const delay = preds.find((p) => p.type === 'DELAY_RISK_PERCENT')
+        const fuel = preds.find((p) => p.type === 'FUEL_ESTIMATE_LITERS')
+        const staleMins = eta?.generatedAt ? Math.round((Date.now() - new Date(eta.generatedAt).getTime()) / 60000) : null
+        return (
+          <div className="text-xs space-y-0.5">
+            <p>ETA: {eta ? `${Number(eta.value).toFixed(1)}h` : '—'}</p>
+            <p>Risk: {delay ? `${Number(delay.value).toFixed(1)}%` : '—'}</p>
+            <p>Fuel: {fuel ? `${Number(fuel.value).toFixed(1)}L` : '—'}</p>
+            {eta?.fallback && <p className="text-amber-600">Heuristic</p>}
+            {staleMins !== null && <p className="text-gray-500">{staleMins}m old</p>}
+          </div>
+        )
+      }
+    },
     {
       key: 'shipment', label: 'Route', render: (_, row) => (
         <div>

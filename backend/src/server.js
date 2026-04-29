@@ -20,6 +20,7 @@ const { apiLimiter } = require('./middleware/rateLimiter');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 const requestId = require('./middleware/requestId');
 const { startAllJobs } = require('./services/cronService');
+const { startMlWorker } = require('./queues/mlQueue');
 
 const authRoutes = require('./routes/authRoutes');
 const shipmentRoutes = require('./routes/shipmentRoutes');
@@ -229,6 +230,8 @@ io.on('connection', (socket) => {
     logger.info(`Socket disconnected: ${socket.id} (${reason})`);
   });
 });
+
+startMlWorker(io);
 
 // ── Graceful shutdown ────────────────────────────────────────────────────────
 async function shutdown(signal) {

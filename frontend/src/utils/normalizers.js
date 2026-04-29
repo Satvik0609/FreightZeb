@@ -100,6 +100,7 @@ export function normalizeShipment(shipment = {}) {
 
 export function normalizePrediction(prediction = {}) {
   const type = prediction.predictionType || prediction.type || 'UNKNOWN'
+  const generatedAt = prediction.generatedAt || prediction.createdAt || null
   return {
     ...prediction,
     predictionType: type,
@@ -116,7 +117,12 @@ export function normalizePrediction(prediction = {}) {
               : type === 'RECOMMENDED_TRUCK_SCORE'
                 ? { score: prediction.value }
                 : { value: prediction.value }),
-    fallback: prediction.modelVersion?.includes('fallback') || false,
+    fallback: prediction.modelVersion?.includes('fallback') || prediction.source === 'heuristic' || false,
+    source: prediction.source || (prediction.modelVersion?.includes('fallback') ? 'heuristic' : 'ml_service'),
+    modelName: prediction.modelName || null,
+    latencyMs: prediction.latencyMs ?? null,
+    explanation: prediction.explanation || null,
+    generatedAt,
   }
 }
 
@@ -194,25 +200,27 @@ export function normalizeAnalytics(role, payload = {}) {
 
   if (role === 'DEALER') {
     const trucksByStatus = analytics.trucksByStatus || {}
-    const bookingsByStatus = analytics.bookingsByStatus || {}
-    const revenueByMonth = payload.revenueByMonth || []
-    const totalRevenue = revenueByMonth.reduce((sum, row) => sum + (Number(row?.revenue) || 0), 0)
+    const trucksByType = analytics.trucksByType || {}
+    const trucksAddedByMonth = payload.trucksAddedByMonth || []
     return {
       stats: {
-        totalRevenue,
         totalTrucks: analytics.totalTrucks || 0,
         availableTrucks: trucksByStatus.AVAILABLE || 0,
         onTripTrucks: (trucksByStatus.BOOKED || 0) + (trucksByStatus.IN_TRANSIT || 0),
         maintenanceTrucks: trucksByStatus.MAINTENANCE || 0,
-        pendingBookings: bookingsByStatus.REQUESTED || 0,
-        activeDeliveries: (bookingsByStatus.ASSIGNED || 0) + (bookingsByStatus.PICKED_UP || 0) + (bookingsByStatus.IN_TRANSIT || 0),
-        completedDeliveries: bookingsByStatus.DELIVERED || 0,
         fleetUtilization: analytics.fleetUtilizationPct || 0,
+        totalCapacityKg: analytics.totalCapacityKg || 0,
+        totalCapacityM3: analytics.totalCapacityM3 || 0,
+        avgPricePerKm: analytics.avgPricePerKm ?? null,
+        avgPredictedEtaHours: analytics.avgPredictedEtaHours ?? null,
+        avgDelayRiskPercent: analytics.avgDelayRiskPercent ?? null,
+        highRiskActiveTrips: analytics.highRiskActiveTrips ?? 0,
+        predictionFreshnessMinutes: analytics.predictionFreshnessMinutes ?? null,
+        fallbackShare: analytics.fallbackShare ?? 0,
       },
       fleetUtilization: Object.entries(trucksByStatus).map(([name, value]) => ({ name, value })),
-      bookingsByStatus,
-      revenueByMonth,
-      deliveriesByMonth: payload.deliveriesByMonth || [],
+      trucksByType: Object.entries(trucksByType).map(([name, value]) => ({ name, value })),
+      trucksAddedByMonth,
     }
   }
 
