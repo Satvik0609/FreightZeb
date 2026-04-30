@@ -15,7 +15,7 @@ def train_all_models():
     """Train and save all ML models."""
     
     logger.info("\n" + "="*70)
-    logger.info("FreightZen ML Models - Training & Saving for Collaborators")
+    logger.info("FreightZeb ML Models - Training & Saving for Collaborators")
     logger.info("="*70)
     
     models_trained = []

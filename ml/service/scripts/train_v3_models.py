@@ -1,7 +1,7 @@
 """
 train_v3_models.py
 ==================
-Retrains all 6 FreightZen ML models as v3.
+Retrains all 6 FreightZeb ML models as v3.
 
 DATASET POLICY
 --------------
@@ -159,7 +159,7 @@ def _fit_encoders(categories_map: dict) -> dict:
 #
 # DATASET NOTE:
 #   No public dataset directly maps (weight, volume, distance, cargo) → truck
-#   class in the way FreightZen defines truck classes.  The correct approach is
+#   class in the way FreightZeb defines truck classes.  The correct approach is
 #   domain-rule generation: assign the *minimum-capacity* truck that fits the
 #   load, then add realistic noise so the model learns soft boundaries.
 #   If you obtain a real fleet dispatch dataset with these columns, place it at:

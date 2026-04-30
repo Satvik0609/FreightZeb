@@ -88,7 +88,7 @@ class DelayPredictorV2:
                 self.roc_auc,
                 self.brier_score,
             )
-                else:
+        else:
             logger.info("Training new binary Delay Predictor ...")
             self._train()
             self._save()
@@ -198,7 +198,7 @@ class DelayPredictorV2:
             df = pd.read_csv(data_path, encoding="latin-1")
             rng = np.random.default_rng(42)
             rows = []
-        for _, row in df.iterrows():
+            for _, row in df.iterrows():
                 distance_km = float(row.get("Distance", rng.uniform(50, 2_000)))
                 weight_kg   = float(row.get("Product Weight", rng.uniform(500, 30_000)))
                 mode        = str(row.get("Shipping Mode", "Standard"))
@@ -234,7 +234,7 @@ class DelayPredictorV2:
     def _train(self):
         from sklearn.preprocessing import StandardScaler
 
-            df = self._load_real_data()
+        df = self._load_real_data()
         if df is None:
             df = self._generate_synthetic_data(20_000)
 

@@ -33,7 +33,7 @@ export default function ForgotPasswordPage() {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 shadow-lg mb-4">
             <Zap className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-white">FreightZen</h1>
+          <h1 className="text-3xl font-bold text-white">FreightZeb</h1>
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8">

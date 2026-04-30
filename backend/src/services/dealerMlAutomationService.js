@@ -19,7 +19,7 @@ async function generateShipmentTruckPredictions(shipmentId, truckId, requestId, 
   ]);
   if (!shipment || !truck || !shipment.pickupLocation || !shipment.destination) return;
 
-  const { distanceKm } = calculateRoute(shipment.pickupLocation, shipment.destination);
+  const { distanceKm } = await calculateRoute(shipment.pickupLocation, shipment.destination);
 
   const [eta, delay, fuel] = await Promise.allSettled([
     mlService.predictDeliveryTime({

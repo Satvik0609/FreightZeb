@@ -118,11 +118,29 @@ const dealerAcceptShipment = asyncHandler(async (req, res) => {
     });
 
     queueMlPredictionJob({ shipmentId, truckId, requestId: req.requestId })
-      .catch((e) => {
-        logger.warn(`Queue unavailable, running inline prediction generation: ${e.message}`);
-        return dealerMlAutomationService.generateShipmentTruckPredictions(shipmentId, truckId, req.requestId, req.app.get('io'));
-      })
-      .catch((e) => logger.warn(`Dealer ML automation failed after booking accept: ${e.message}`));
+        .catch((e) => {
+            logger.warn(`Queue unavailable, running inline prediction generation: ${e.message}`);
+            return dealerMlAutomationService.generateShipmentTruckPredictions(shipmentId, truckId, req.requestId, req.app.get('io'));
+        })
+        .catch((e) => logger.warn(`Dealer ML automation failed after booking accept: ${e.message}`));
+
+    // Notify warehouse in real-time that their shipment was accepted
+    const io = req.app.get('io');
+    if (io) {
+        io.to(`user:${shipment.warehouseId}`).emit('shipment:accepted', {
+            shipmentId,
+            bookingId: approved.id,
+            dealerId: req.user.id,
+            dealerName: req.user.name || req.user.email,
+            truckId,
+            status: 'APPROVED',
+        });
+        // Also broadcast so warehouse shipment list refreshes
+        io.to(`user:${shipment.warehouseId}`).emit('shipment:statusUpdate', {
+            shipmentId,
+            status: 'BOOKED',
+        });
+    }
 
     res.status(201).json({ success: true, booking: approved });
 });

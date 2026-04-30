@@ -32,7 +32,7 @@ async function sendMail({ to, subject, html, text }) {
     }
     try {
         await transporter.sendMail({
-            from: process.env.SMTP_FROM || 'noreply@freightzen.com',
+            from: process.env.SMTP_FROM || 'noreply@FreightZeb.com',
             to,
             subject,
             html,

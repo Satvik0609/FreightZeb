@@ -7,7 +7,7 @@
 const { prisma } = require('../config/db');
 
 const BOOKING_DETAIL_INCLUDE = {
-    shipment: true,
+    shipment: { include: { predictions: true } },
     truck: true,
     warehouse: { select: { id: true, name: true, email: true, company: true } },
     dealer: { select: { id: true, name: true, email: true, phone: true, company: true } },
@@ -27,7 +27,7 @@ async function findByWarehouse(warehouseId, { status, skip, limit }) {
         prisma.booking.findMany({
             where,
             include: {
-                shipment: true,
+                shipment: { include: { predictions: true } },
                 truck: true,
                 dealer: { select: { id: true, name: true, email: true, phone: true, company: true } },
                 trackingLogs: { orderBy: { timestamp: 'desc' }, take: 1 },

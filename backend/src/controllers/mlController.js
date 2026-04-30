@@ -218,24 +218,15 @@ const predictDelayRisk = asyncHandler(async (req, res) => {
     latestBooking?.distanceKm ||
     1;
 
-  let result;
-  try {
-    result = await mlService.predictDelayRisk({
-      distance_km: distanceKm,
-      weight_kg: shipment.weightKg,
-      truck_type: truckType,
-      weather_condition: req.query.weather || 'CLEAR',
-      traffic_condition: req.query.traffic || 'MODERATE',
-      time_of_day: req.query.time_of_day || 'AFTERNOON',
-    }, req.requestId);
-  } catch (err) {
-    logger.warn(`predictDelayRisk ML call failed: ${err.message}`);
-    return res.status(503).json({
-      success: false,
-      code: 'ML_UNAVAILABLE',
-      message: 'Delay risk prediction requires the ML service to be available.',
-    });
-  }
+  // predictDelayRisk now has a heuristic fallback — it never throws
+  const result = await mlService.predictDelayRisk({
+    distance_km: distanceKm,
+    weight_kg: shipment.weightKg,
+    truck_type: truckType,
+    weather_condition: req.query.weather || 'CLEAR',
+    traffic_condition: req.query.traffic || 'MODERATE',
+    time_of_day: req.query.time_of_day || 'AFTERNOON',
+  }, req.requestId);
 
   await prisma.$transaction([
     prisma.prediction.deleteMany({ where: { shipmentId: shipment.id, type: 'DELAY_RISK_PERCENT' } }),
@@ -322,7 +313,7 @@ const predictForBooking = asyncHandler(async (req, res) => {
     orderBy: { createdAt: 'desc' },
   });
 
-  res.json({ success: true, bookingId: booking.id, shipmentId: booking.shipmentId, predictions });
+  res.json({ success: true, bookingId: booking.id, shipmentId: booking.shipmentId, predictions, conditions });
 });
 
 const predictForBookingsBatch = asyncHandler(async (req, res) => {

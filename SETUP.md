@@ -1,4 +1,4 @@
-# FreightZen — Complete Setup Guide (Windows)
+# FreightZeb — Complete Setup Guide (Windows)
 
 ## Prerequisites
 
@@ -96,7 +96,7 @@ Then open `http://localhost:5173` in your browser.
 
 | Role | Email | Password |
 |------|-------|----------|
-| Admin | admin@freightzen.in | Admin@1234 |
+| Admin | admin@FreightZeb.in | Admin@1234 |
 | Warehouse | ops@bharat-logistics.in | Warehouse@1234 |
 | Dealer | fleet@rajesh-transport.in | Dealer@1234 |
 
@@ -130,7 +130,7 @@ Then open `http://localhost:5173` in your browser.
 4. Approve → Assign → Picked Up → In Transit → Delivered
 5. **Tracking** → Update GPS location for trucks in transit
 
-### As Admin (`admin@freightzen.in`)
+### As Admin (`admin@FreightZeb.in`)
 1. Login → Full system analytics
 2. **Admin → Users** → manage all accounts
 3. All shipments, trucks, bookings, invoices visible

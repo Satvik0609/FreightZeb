@@ -35,6 +35,20 @@ async function createShipment(req, res, next) {
       },
     });
 
+    // Broadcast to all dealers so their shipment list auto-refreshes
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('shipment:new', {
+        shipmentId: shipment.id,
+        warehouseId: req.user.id,
+        origin: pickupLocation?.city || pickupLocation?.address || null,
+        destination: destination?.city || destination?.address || null,
+        weightKg,
+        status: 'PENDING',
+        createdAt: shipment.createdAt,
+      });
+    }
+
     logger.info(`Shipment created: ${shipment.id} by ${req.user.id}`);
     res.status(201).json({ success: true, shipment });
   } catch (err) {
@@ -81,7 +95,52 @@ async function getMyShipments(req, res, next) {
   }
 }
 
-// ── Admin: all shipments ─────────────────────────────────────────────────────
+// ── Dealer: list available shipments (PENDING / OPTIMIZED) ──────────────────
+async function getAvailableShipments(req, res, next) {
+  try {
+    const { status, search, dateFrom, dateTo } = req.query;
+    const { page, limit, skip } = parsePagination(req.query);
+
+    const where = {
+      status: status ? status : { in: ['PENDING', 'OPTIMIZED'] },
+    };
+
+    if (dateFrom || dateTo) {
+      where.createdAt = {};
+      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
+      if (dateTo) where.createdAt.lte = new Date(dateTo);
+    }
+    if (search) {
+      where.OR = [
+        { description: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [shipments, total] = await Promise.all([
+      prisma.shipment.findMany({
+        where,
+        include: {
+          warehouse: { select: { id: true, name: true, company: true } },
+          predictions: true,
+          bookings: {
+            where: { status: { notIn: ['CANCELLED', 'REJECTED'] } },
+            select: { id: true, status: true, dealerId: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.shipment.count({ where }),
+    ]);
+
+    res.json({ success: true, total, page: Number(page), limit: Number(limit), shipments });
+  } catch (err) {
+    next(err);
+  }
+}
+
+
 async function getAllShipments(req, res, next) {
   try {
     const { status, warehouseId, dateFrom, dateTo } = req.query;
@@ -185,7 +244,7 @@ async function cancelShipment(req, res, next) {
       });
 
       const openBookingIds = openBookings.map((b) => b.id);
-      const truckIds       = [...new Set(openBookings.map((b) => b.truckId))];
+      const truckIds = [...new Set(openBookings.map((b) => b.truckId))];
 
       if (openBookingIds.length > 0) {
         // Cancel all open bookings
@@ -336,6 +395,7 @@ async function runOptimization(req, res, next) {
 module.exports = {
   createShipment,
   getMyShipments,
+  getAvailableShipments,
   getAllShipments,
   getShipment,
   cancelShipment,

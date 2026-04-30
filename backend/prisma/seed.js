@@ -130,16 +130,16 @@ const BOOKING_STATUSES = { PENDING: 'REQUESTED', OPTIMIZED: 'REQUESTED', BOOKED:
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-    console.log('🌱 Seeding FreightZen (small scale)...\n');
+    console.log('🌱 Seeding FreightZeb (small scale)...\n');
 
     // 1. Admin
     const admin = await prisma.user.upsert({
-        where: { email: 'admin@freightzen.in' },
+        where: { email: 'admin@FreightZeb.in' },
         update: {},
         create: {
-            email: 'admin@freightzen.in', password: await hash('Admin@1234'),
+            email: 'admin@FreightZeb.in', password: await hash('Admin@1234'),
             name: 'Arjun Mehta', role: 'ADMIN',
-            company: 'FreightZen Technologies', phone: '+919900000001',
+            company: 'FreightZeb Technologies', phone: '+919900000001',
         },
     });
 
@@ -388,7 +388,7 @@ async function main() {
     ]);
 
     console.log('═══════════════════════════════════════════════');
-    console.log('🎉  FreightZen seed complete!');
+    console.log('🎉  FreightZeb seed complete!');
     console.log('═══════════════════════════════════════════════');
     console.log(`  Users         : ${counts[0]}`);
     console.log(`  Trucks        : ${counts[1]}`);
@@ -400,7 +400,7 @@ async function main() {
     console.log(`  Predictions   : ${counts[7]}`);
     console.log('═══════════════════════════════════════════════');
     console.log('\nLogin credentials:');
-    console.log('  Admin     → admin@freightzen.in            / Admin@1234');
+    console.log('  Admin     → admin@FreightZeb.in            / Admin@1234');
     console.log('  Warehouse → ops@bharat-logistics.in        / Warehouse@1234');
     console.log('  Dealer    → fleet@rajesh-transport.in      / Dealer@1234\n');
 }

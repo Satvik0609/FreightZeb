@@ -88,7 +88,7 @@ def test_delivery_predictor():
 def main():
     """Run all tests."""
     logger.info("\n" + "🚀 "*20)
-    logger.info("FreightZen ML Models V2 - Advanced Testing")
+    logger.info("FreightZeb ML Models V2 - Advanced Testing")
     logger.info("🚀 "*20)
     
     results = []

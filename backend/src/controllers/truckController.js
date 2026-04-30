@@ -1,7 +1,7 @@
 const { prisma } = require('../config/db');
 const logger = require('../config/logger');
 const { parsePagination } = require('../helpers/pagination');
-const { calculateRoute } = require('../services/routeService');
+const { calculateRoute, haversineKm } = require('../services/routeService');
 const pricingService = require('../services/pricingService');
 const dealerMlAutomationService = require('../services/dealerMlAutomationService');
 const { queueNewTruckAutomation } = require('../queues/mlQueue');
@@ -15,6 +15,84 @@ const OPERATING_COST_PER_KM = {
   FLATBED_TRAILER: 28,
   REEFER: 35,
 };
+
+// ── Per-truck shipment matching helpers (ported from original) ────────────────
+
+function getCity(location) {
+  return String(location?.city || location?.address || '').trim().toLowerCase();
+}
+
+function routeScore(truck, shipment) {
+  const fromCity = getCity(shipment.pickupLocation);
+  const toCity = getCity(shipment.destination);
+  const truckFrom = String(truck.routeFrom || '').trim().toLowerCase();
+  const truckTo = String(truck.routeTo || '').trim().toLowerCase();
+
+  if (!fromCity || !toCity || !truckFrom || !truckTo) return 0.5;
+
+  const fromMatch = fromCity.includes(truckFrom) || truckFrom.includes(fromCity);
+  const toMatch = toCity.includes(truckTo) || truckTo.includes(toCity);
+  if (fromMatch && toMatch) return 1;
+  if (fromMatch || toMatch) return 0.55;
+  return 0.15;
+}
+
+function shipmentDistanceKm(shipment) {
+  const origin = shipment.pickupLocation || {};
+  const destination = shipment.destination || {};
+  const lat1 = Number(origin.lat), lng1 = Number(origin.lng);
+  const lat2 = Number(destination.lat), lng2 = Number(destination.lng);
+  if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) return null;
+  // Use haversine as a sync estimate for scoring — Google Maps is called
+  // for the final profit calculation in getDealerProfitOpportunities.
+  return Number(haversineKm(lat1, lng1, lat2, lng2).toFixed(2));
+}
+
+function scoreShipmentForTruck(truck, shipment) {
+  const distanceKm = shipmentDistanceKm(shipment);
+  const pricePerKm = Number(truck.pricePerKm || 0);
+  const operatingCostPerKm = OPERATING_COST_PER_KM[truck.truckType] || 22;
+
+  const estimatedRevenue = distanceKm !== null && pricePerKm > 0
+    ? Number((pricePerKm * distanceKm).toFixed(2)) : null;
+  const estimatedCost = distanceKm !== null
+    ? Number((operatingCostPerKm * distanceKm).toFixed(2)) : null;
+  const estimatedProfit = estimatedRevenue !== null && estimatedCost !== null
+    ? Number((estimatedRevenue - estimatedCost).toFixed(2)) : null;
+
+  const weightUtilization = Math.min(shipment.weightKg / truck.capacityKg, 1);
+  const volumeUtilization = shipment.volumeM3 && truck.capacityM3
+    ? Math.min(shipment.volumeM3 / truck.capacityM3, 1) : weightUtilization;
+  const utilizationScore = (weightUtilization + volumeUtilization) / 2;
+  const laneScore = routeScore(truck, shipment);
+  const profitScore = estimatedRevenue && estimatedProfit !== null
+    ? Math.max(0, Math.min(1, estimatedProfit / estimatedRevenue)) : 0.4;
+  const urgencyScore = shipment.deadline ? 0.8 : 0.45;
+
+  const score = (
+    utilizationScore * 0.4 +
+    laneScore * 0.25 +
+    profitScore * 0.25 +
+    urgencyScore * 0.1
+  ) * 100;
+
+  return {
+    shipment,
+    score: Number(score.toFixed(1)),
+    distanceKm,
+    estimatedRevenue,
+    estimatedCost,
+    estimatedProfit,
+    marginPct: estimatedRevenue && estimatedProfit !== null
+      ? Number(((estimatedProfit / estimatedRevenue) * 100).toFixed(1)) : null,
+    breakdown: {
+      utilizationScore: Number((utilizationScore * 100).toFixed(1)),
+      routeScore: Number((laneScore * 100).toFixed(1)),
+      profitScore: Number((profitScore * 100).toFixed(1)),
+      urgencyScore: Number((urgencyScore * 100).toFixed(1)),
+    },
+  };
+}
 
 function toNumber(value) {
   const parsed = Number(value);
@@ -146,10 +224,19 @@ async function getDealerProfitOpportunities(req, res, next) {
 
     const opportunities = [];
 
-    for (const shipment of openShipments) {
-      if (!hasValidCoordinates(shipment.pickupLocation) || !hasValidCoordinates(shipment.destination)) continue;
+    // Fetch all routes in parallel (Google Maps or Haversine fallback)
+    const validShipments = openShipments.filter(
+      (s) => hasValidCoordinates(s.pickupLocation) && hasValidCoordinates(s.destination)
+    );
+    const routes = await Promise.all(
+      validShipments.map((s) => calculateRoute(s.pickupLocation, s.destination).catch(() => null))
+    );
 
-      const { distanceKm } = calculateRoute(shipment.pickupLocation, shipment.destination);
+    for (let i = 0; i < validShipments.length; i++) {
+      const shipment = validShipments[i];
+      const route = routes[i];
+      if (!route) continue;
+      const { distanceKm } = route;
       let best = null;
 
       for (const truck of dealerTrucks) {
@@ -172,6 +259,9 @@ async function getDealerProfitOpportunities(req, res, next) {
             registrationNo: truck.registrationNo,
             truckType: truck.truckType,
             distanceKm: pricing.distanceKm,
+            distanceText: route.distanceText || null,
+            durationText: route.durationText || null,
+            distanceSource: route.source,
             estimatedRevenue: pricing.total,
             estimatedOperatingCost: operatingCost,
             estimatedProfit,
@@ -248,7 +338,7 @@ async function getAvailableTrucks(req, res, next) {
     if (truckType) where.truckType = truckType;
     if (minCapacityKg) where.capacityKg = { gte: parseFloat(minCapacityKg) };
     if (routeFrom) where.routeFrom = { contains: routeFrom, mode: 'insensitive' };
-    if (routeTo)   where.routeTo   = { contains: routeTo,   mode: 'insensitive' };
+    if (routeTo) where.routeTo = { contains: routeTo, mode: 'insensitive' };
 
     const [trucks, total] = await Promise.all([
       prisma.truck.findMany({
@@ -298,14 +388,14 @@ async function updateTruck(req, res, next) {
     // as it can silently nullify non-nullable columns.
     const { truckType, capacityKg, capacityM3, routeFrom, routeTo, pricePerKm, availability, status } = req.body;
     const data = {};
-    if (truckType    !== undefined) data.truckType    = truckType;
-    if (capacityKg   !== undefined) data.capacityKg   = capacityKg;
-    if (capacityM3   !== undefined) data.capacityM3   = capacityM3;
-    if (routeFrom    !== undefined) data.routeFrom    = routeFrom;
-    if (routeTo      !== undefined) data.routeTo      = routeTo;
-    if (pricePerKm   !== undefined) data.pricePerKm   = pricePerKm;
+    if (truckType !== undefined) data.truckType = truckType;
+    if (capacityKg !== undefined) data.capacityKg = capacityKg;
+    if (capacityM3 !== undefined) data.capacityM3 = capacityM3;
+    if (routeFrom !== undefined) data.routeFrom = routeFrom;
+    if (routeTo !== undefined) data.routeTo = routeTo;
+    if (pricePerKm !== undefined) data.pricePerKm = pricePerKm;
     if (availability !== undefined) data.availability = availability;
-    if (status       !== undefined) data.status       = status;
+    if (status !== undefined) data.status = status;
 
     if (Object.keys(data).length === 0) {
       return res.status(400).json({ success: false, message: 'No fields provided to update' });
@@ -360,10 +450,101 @@ async function deleteTruck(req, res, next) {
   }
 }
 
+// Dealer: find best open shipments for a specific truck (scored ranking)
+async function getTruckShipmentMatches(req, res, next) {
+  try {
+    const { limit = 10 } = req.query;
+    const take = Math.min(Math.max(Number(limit) || 10, 1), 50);
+
+    const truck = await prisma.truck.findUnique({
+      where: { id: req.params.id },
+      include: { dealer: { select: { id: true, name: true, company: true } } },
+    });
+
+    if (!truck) return res.status(404).json({ success: false, message: 'Truck not found' });
+    if (truck.dealerId !== req.user.id && req.user.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    if (truck.status !== 'AVAILABLE' || !truck.availability) {
+      return res.json({
+        success: true, truck, total: 0, matches: [],
+        unavailable: true, reason: `Truck is currently ${truck.status}`,
+      });
+    }
+
+    const shipments = await prisma.shipment.findMany({
+      where: {
+        status: { in: ['PENDING', 'OPTIMIZED'] },
+        weightKg: { lte: truck.capacityKg },
+        ...(truck.capacityM3
+          ? { OR: [{ volumeM3: null }, { volumeM3: { lte: truck.capacityM3 } }] }
+          : {}),
+      },
+      include: {
+        warehouse: { select: { id: true, name: true, company: true } },
+        predictions: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    // Score with Haversine first (sync, for ranking)
+    const scored = shipments
+      .map((shipment) => scoreShipmentForTruck(truck, shipment))
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return (b.estimatedProfit || 0) - (a.estimatedProfit || 0);
+      })
+      .slice(0, take);
+
+    // Enrich top matches with real Google Maps distance + accurate pricing
+    const enriched = await Promise.all(scored.map(async (match) => {
+      const origin = match.shipment.pickupLocation;
+      const destination = match.shipment.destination;
+      if (!hasValidCoordinates(origin) || !hasValidCoordinates(destination)) return match;
+
+      try {
+        const route = await calculateRoute(origin, destination);
+        const pricing = pricingService.calculate({
+          distanceKm: route.distanceKm,
+          weightKg: match.shipment.weightKg,
+          truckType: truck.truckType,
+          dealerPricePerKm: truck.pricePerKm,
+        });
+        const operatingCost = estimateOperatingCost(route.distanceKm, truck.truckType);
+        const estimatedProfit = Number((pricing.total - operatingCost).toFixed(2));
+
+        return {
+          ...match,
+          distanceKm: route.distanceKm,
+          distanceText: route.distanceText || `${route.distanceKm} km`,
+          durationMin: route.durationMin,
+          durationText: route.durationText || null,
+          distanceSource: route.source,
+          estimatedRevenue: pricing.total,
+          estimatedCost: operatingCost,
+          estimatedProfit,
+          marginPct: pricing.total > 0
+            ? Number(((estimatedProfit / pricing.total) * 100).toFixed(1)) : null,
+          pricing,
+        };
+      } catch {
+        return match; // keep Haversine values on error
+      }
+    }));
+
+    res.json({ success: true, truck, total: enriched.length, matches: enriched });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   createTruck,
   getMyTrucks,
   getDealerProfitOpportunities,
+  getTruckShipmentMatches,
   getAllTrucks,
   getAvailableTrucks,
   getTruck,

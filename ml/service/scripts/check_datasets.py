@@ -112,7 +112,7 @@ def check_dataset(spec: dict) -> bool:
 
 def main():
     print("=" * 55)
-    print("  FreightZen ML — Dataset Readiness Check")
+    print("  FreightZeb ML — Dataset Readiness Check")
     print("=" * 55)
 
     passed = 0

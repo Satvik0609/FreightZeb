@@ -1,9 +1,13 @@
 /**
  * Route calculation utilities.
- * Uses Haversine formula for straight-line distance estimation.
- * Replace calculateRoute() with Google Maps / OSRM for real road distances.
+ * Primary: Google Maps Directions API — real road distance, duration, traffic, steps.
+ * Fallback: Haversine formula (straight-line) if API key missing or call fails.
  */
 
+const axios = require('axios');
+const logger = require('../config/logger');
+
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 const AVERAGE_SPEED_KMH = 60;
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -18,16 +22,63 @@ function haversineKm(lat1, lng1, lat2, lng2) {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function calculateRoute(origin, destination) {
-    const distanceKm = parseFloat(haversineKm(origin.lat, origin.lng, destination.lat, destination.lng).toFixed(2));
-    const durationMin = Math.round((distanceKm / AVERAGE_SPEED_KMH) * 60);
-    return { distanceKm, durationMin };
+async function _fetchGoogleMapsRoute(origin, destination) {
+    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === 'YOUR_GOOGLE_MAPS_API_KEY') return null;
+
+    try {
+        const { data } = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
+            params: {
+                origin: `${origin.lat},${origin.lng}`,
+                destination: `${destination.lat},${destination.lng}`,
+                units: 'metric',
+                departure_time: 'now',
+                traffic_model: 'best_guess',
+                key: GOOGLE_MAPS_API_KEY,
+            },
+            timeout: 6000,
+        });
+
+        if (data.status !== 'OK' || !data.routes?.length) {
+            logger.warn(`Google Maps Directions API: ${data.status}`);
+            return null;
+        }
+
+        const leg = data.routes[0].legs[0];
+        const distanceKm = parseFloat((leg.distance.value / 1000).toFixed(2));
+        const durationMin = Math.round(leg.duration.value / 60);
+        const durationInTrafficMin = leg.duration_in_traffic
+            ? Math.round(leg.duration_in_traffic.value / 60) : null;
+
+        return {
+            distanceKm,
+            durationMin,
+            distanceText: leg.distance.text,
+            durationText: leg.duration.text,
+            durationInTrafficMin,
+            durationInTrafficText: leg.duration_in_traffic?.text || null,
+            trafficDelayMin: durationInTrafficMin != null
+                ? Math.max(0, durationInTrafficMin - durationMin) : null,
+            source: 'google_maps',
+        };
+    } catch (err) {
+        logger.warn(`Google Maps API error: ${err.message} — falling back to Haversine`);
+        return null;
+    }
 }
 
 /**
- * Pick the most appropriate truck type based on shipment weight.
- * Used as a starting point — optimization engine refines further.
+ * Calculate route. Tries Google Maps first, falls back to Haversine.
+ * Always async — await this everywhere.
  */
+async function calculateRoute(origin, destination) {
+    const google = await _fetchGoogleMapsRoute(origin, destination);
+    if (google) return google;
+
+    const distanceKm = parseFloat(haversineKm(origin.lat, origin.lng, destination.lat, destination.lng).toFixed(2));
+    const durationMin = Math.round((distanceKm / AVERAGE_SPEED_KMH) * 60);
+    return { distanceKm, durationMin, source: 'haversine' };
+}
+
 function pickTruckType(weightKg) {
     if (weightKg <= 1500) return 'SMALL_VAN';
     if (weightKg <= 10000) return 'CONTAINER_20FT';

@@ -1,7 +1,7 @@
 """
 download_datasets.py
 ====================
-Downloads the two Kaggle datasets used for training FreightZen ML models.
+Downloads the two Kaggle datasets used for training FreightZeb ML models.
 
 DATASETS
 --------

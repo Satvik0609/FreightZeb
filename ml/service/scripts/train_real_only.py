@@ -1,6 +1,6 @@
 """
 train_real_only.py
-Trains all 6 FreightZen V2 models on REAL Kaggle data only.
+Trains all 6 FreightZeb V2 models on REAL Kaggle data only.
 Zero synthetic data. Hard fails if CSVs are missing.
 
 Datasets (run download_datasets.py first):
@@ -722,12 +722,12 @@ def train_route_optimizer(force: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train all 6 FreightZen models on real Kaggle data only")
+        description="Train all 6 FreightZeb models on real Kaggle data only")
     parser.add_argument("--force", action="store_true",
                         help="Force retrain even if saved models exist")
     args = parser.parse_args()
 
-    log.info("FreightZen ML — Real-Data-Only Training")
+    log.info("FreightZeb ML — Real-Data-Only Training")
     log.info("force=%s", args.force)
 
     # Verify datasets

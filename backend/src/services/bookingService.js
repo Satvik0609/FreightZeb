@@ -3,31 +3,31 @@
  * Pure business logic. No req/res. Testable in isolation.
  */
 
-const bookingRepo      = require('../repositories/bookingRepository');
+const bookingRepo = require('../repositories/bookingRepository');
 const { calculateRoute } = require('./routeService');
-const pricingService   = require('./pricingService');
-const { AppError }     = require('../helpers/errors');
-const { prisma }       = require('../config/db');
-const logger           = require('../config/logger');
+const pricingService = require('./pricingService');
+const { AppError } = require('../helpers/errors');
+const { prisma } = require('../config/db');
+const logger = require('../config/logger');
 
 // ── State machine ─────────────────────────────────────────────────────────────
 const TRANSITIONS = {
-  REQUESTED:  ['APPROVED', 'REJECTED', 'CANCELLED'],
-  APPROVED:   ['ASSIGNED', 'CANCELLED'],
-  ASSIGNED:   ['PICKED_UP', 'CANCELLED'],
-  PICKED_UP:  ['IN_TRANSIT'],
+  REQUESTED: ['APPROVED', 'REJECTED', 'CANCELLED'],
+  APPROVED: ['ASSIGNED', 'CANCELLED'],
+  ASSIGNED: ['PICKED_UP', 'CANCELLED'],
+  PICKED_UP: ['IN_TRANSIT'],
   IN_TRANSIT: ['DELIVERED'],
 };
 
 // Who can trigger each status change
 const ROLE_GATES = {
-  APPROVED:   ['DEALER', 'ADMIN'],
-  REJECTED:   ['DEALER', 'ADMIN'],
-  ASSIGNED:   ['DEALER', 'ADMIN'],
-  CANCELLED:  ['WAREHOUSE', 'ADMIN'],
-  PICKED_UP:  ['DEALER', 'ADMIN'],
-  IN_TRANSIT: ['DEALER', 'ADMIN'],
-  DELIVERED:  ['DEALER', 'ADMIN'],
+  APPROVED: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  REJECTED: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  ASSIGNED: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  CANCELLED: ['WAREHOUSE', 'CARGO_DEALER', 'ADMIN'],
+  PICKED_UP: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  IN_TRANSIT: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
+  DELIVERED: ['DEALER', 'CARGO_DEALER', 'ADMIN'],
 };
 
 /**
@@ -46,13 +46,13 @@ async function create({ shipmentId, truckId, warehouseId, notes, optimScore }) {
   ]);
 
   if (!shipment) throw AppError.notFound('Shipment not found');
-  if (!truck)    throw AppError.notFound('Truck not found');
+  if (!truck) throw AppError.notFound('Truck not found');
 
   if (shipment.warehouseId !== warehouseId) {
     throw AppError.forbidden('You do not own this shipment');
   }
 
-  const { distanceKm, durationMin } = calculateRoute(shipment.pickupLocation, shipment.destination);
+  const { distanceKm, durationMin } = await calculateRoute(shipment.pickupLocation, shipment.destination);
   const estimatedEta = new Date(Date.now() + durationMin * 60 * 1000);
   const pricing = pricingService.calculate({
     distanceKm,
@@ -69,7 +69,7 @@ async function create({ shipmentId, truckId, warehouseId, notes, optimScore }) {
     distanceKm,
     estimatedEta,
     pricing,
-    notes:      notes || null,
+    notes: notes || null,
     optimScore: optimScore || null,
   });
 
@@ -100,8 +100,8 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
 
   const data = { status: newStatus };
   if (notes) data.notes = notes;
-  if (newStatus === 'PICKED_UP')  data.pickedUpAt  = new Date();
-  if (newStatus === 'DELIVERED')  data.deliveredAt = new Date();
+  if (newStatus === 'PICKED_UP') data.pickedUpAt = new Date();
+  if (newStatus === 'DELIVERED') data.deliveredAt = new Date();
 
   const updated = await prisma.$transaction(async (tx) => {
     const b = await tx.booking.update({ where: { id: bookingId }, data });
@@ -239,8 +239,8 @@ async function getOne(bookingId, user) {
   if (!booking) throw AppError.notFound('Booking not found');
 
   const isWarehouse = booking.warehouseId === user.id;
-  const isDealer    = booking.dealerId    === user.id;
-  const isAdmin     = user.role           === 'ADMIN';
+  const isDealer = booking.dealerId === user.id;
+  const isAdmin = user.role === 'ADMIN';
 
   if (!isWarehouse && !isDealer && !isAdmin) throw AppError.forbidden();
   return booking;

@@ -1,6 +1,6 @@
 """
 ml/service/app.py
-Production-grade FreightZen ML Service.
+Production-grade FreightZeb ML Service.
 
 Changes vs original main.py:
 - Lazy model loading with lifespan startup event (one failure won't kill the service)
@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="FreightZen ML Service",
+    title="FreightZeb ML Service",
     version="2.1.0",
     description="Production ML microservice for logistics predictions",
     lifespan=lifespan,

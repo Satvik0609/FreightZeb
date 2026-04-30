@@ -11,10 +11,10 @@ const { createBookingRules, updateStatusRules } = require('../validators/booking
 router.use(protect);
 
 // Named paths before /:id
-router.post('/', restrictTo('WAREHOUSE', 'ADMIN'), createBookingRules, validate, createBooking);
-router.post('/dealer-accept', restrictTo('DEALER'), createBookingRules, validate, dealerAcceptShipment);
-router.get('/my', restrictTo('WAREHOUSE'), getMyBookings);
-router.get('/dealer', restrictTo('DEALER'), getDealerBookings);
+router.post('/', restrictTo('WAREHOUSE', 'CARGO_DEALER', 'ADMIN'), createBookingRules, validate, createBooking);
+router.post('/dealer-accept', restrictTo('DEALER', 'CARGO_DEALER'), createBookingRules, validate, dealerAcceptShipment);
+router.get('/my', restrictTo('WAREHOUSE', 'CARGO_DEALER'), getMyBookings);
+router.get('/dealer', restrictTo('DEALER', 'CARGO_DEALER'), getDealerBookings);
 router.get('/', restrictTo('ADMIN'), getAllBookings);
 
 // Parameterised

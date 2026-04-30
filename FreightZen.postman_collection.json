@@ -1,8 +1,8 @@
 {
   "info": {
-    "name": "FreightZen API",
-    "_postman_id": "freightzen-api-v1",
-    "description": "Complete API collection for FreightZen logistics platform.\n\n## Setup\n1. Start backend: `npm run dev` (port 5000)\n2. Start ML service: `uvicorn main:app` (port 8000)\n3. Run **01 - Register (ADMIN)** first, then **02 - Login**\n4. The `token` variable auto-saves after login â€” all auth requests use it automatically\n\n## Roles\n- **ADMIN** â†’ full access\n- **WAREHOUSE** â†’ create shipments, bookings, view own data\n- **DEALER** â†’ create trucks, view bookings assigned to them\n\n## Testing Flow\n1. Auth â†’ Register â†’ Login (saves token)\n2. Trucks â†’ Create Truck\n3. Shipments â†’ Create Shipment\n4. Bookings â†’ Create Booking (use IDs from steps 2 & 3)\n5. Bookings â†’ Update Status (APPROVED â†’ IN_TRANSIT â†’ DELIVERED)\n6. Tracking â†’ Push Location\n7. ML â†’ all predictions\n8. Analytics â†’ view dashboard data",
+    "name": "FreightZeb API",
+    "_postman_id": "FreightZeb-api-v1",
+    "description": "Complete API collection for FreightZeb logistics platform.\n\n## Setup\n1. Start backend: `npm run dev` (port 5000)\n2. Start ML service: `uvicorn main:app` (port 8000)\n3. Run **01 - Register (ADMIN)** first, then **02 - Login**\n4. The `token` variable auto-saves after login â€” all auth requests use it automatically\n\n## Roles\n- **ADMIN** â†’ full access\n- **WAREHOUSE** â†’ create shipments, bookings, view own data\n- **DEALER** â†’ create trucks, view bookings assigned to them\n\n## Testing Flow\n1. Auth â†’ Register â†’ Login (saves token)\n2. Trucks â†’ Create Truck\n3. Shipments â†’ Create Shipment\n4. Bookings â†’ Create Booking (use IDs from steps 2 & 3)\n5. Bookings â†’ Update Status (APPROVED â†’ IN_TRANSIT â†’ DELIVERED)\n6. Tracking â†’ Push Location\n7. ML â†’ all predictions\n8. Analytics â†’ view dashboard data",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -77,7 +77,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Admin User\",\n  \"email\": \"admin@freightzen.in\",\n  \"password\": \"Admin@1234\",\n  \"role\": \"ADMIN\",\n  \"phone\": \"9876543210\",\n  \"company\": \"FreightZen HQ\"\n}"
+              "raw": "{\n  \"name\": \"Admin User\",\n  \"email\": \"admin@FreightZeb.in\",\n  \"password\": \"Admin@1234\",\n  \"role\": \"ADMIN\",\n  \"phone\": \"9876543210\",\n  \"company\": \"FreightZeb HQ\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api","auth","register"] },
             "description": "Register an ADMIN user. Token auto-saved to collection variable."
@@ -120,7 +120,7 @@
                   "  url: base + '/api/auth/login',",
                   "  method: 'POST',",
                   "  header: { 'Content-Type': 'application/json' },",
-                  "  body: { mode: 'raw', raw: JSON.stringify({ email: 'admin@freightzen.in', password: 'Admin@5678' }) }",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ email: 'admin@FreightZeb.in', password: 'Admin@5678' }) }",
                   "}, (err, res) => {",
                   "  if (!err && res.code === 200) {",
                   "    // Password was changed in a previous run — reset it back to Admin@1234",
@@ -154,7 +154,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"admin@freightzen.in\",\n  \"password\": \"Admin@1234\"\n}"
+              "raw": "{\n  \"email\": \"admin@FreightZeb.in\",\n  \"password\": \"Admin@1234\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] },
             "description": "Login. JWT token is auto-saved to {{token}} variable."
@@ -178,7 +178,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Admin Updated\",\n  \"phone\": \"9999999999\",\n  \"company\": \"FreightZen Corp\"\n}"
+              "raw": "{\n  \"name\": \"Admin Updated\",\n  \"phone\": \"9999999999\",\n  \"company\": \"FreightZeb Corp\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/me", "host": ["{{baseUrl}}"], "path": ["api","auth","me"] }
           }
@@ -196,7 +196,7 @@
                   "  url: pm.collectionVariables.get('baseUrl') + '/api/auth/login',",
                   "  method: 'POST',",
                   "  header: { 'Content-Type': 'application/json' },",
-                  "  body: { mode: 'raw', raw: JSON.stringify({ email: 'admin@freightzen.in', password: 'Admin@5678' }) }",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ email: 'admin@FreightZeb.in', password: 'Admin@5678' }) }",
                   "};",
                   "pm.sendRequest(loginReq, (err, res) => {",
                   "  if (!err && res.code === 200) {",
@@ -244,7 +244,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"admin@freightzen.in\",\n  \"password\": \"Admin@5678\"\n}"
+              "raw": "{\n  \"email\": \"admin@FreightZeb.in\",\n  \"password\": \"Admin@5678\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] }
           }
@@ -256,7 +256,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"admin@freightzen.in\"\n}"
+              "raw": "{\n  \"email\": \"admin@FreightZeb.in\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["api","auth","forgot-password"] }
           }
@@ -1180,7 +1180,7 @@
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"email\": \"admin@freightzen.in\",\n  \"password\": \"WrongPassword123\"\n}" },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"admin@FreightZeb.in\",\n  \"password\": \"WrongPassword123\"\n}" },
             "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] }
           }
         },

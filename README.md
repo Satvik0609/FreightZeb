@@ -1,4 +1,4 @@
-# FreightZen — Complete System Documentation
+# FreightZeb — Complete System Documentation
 
 > Full-stack logistics platform with AI-powered predictions.
 > **Backend-v2** (Node.js / Express / Prisma / PostgreSQL) + **ML-v2** (Python / FastAPI / XGBoost / CatBoost / LightGBM)
@@ -92,7 +92,7 @@
 ## 2. Project Structure
 
 ```
-freightzen/
+FreightZeb/
 │
 ├── backend/
 │   └── backend/
@@ -395,7 +395,7 @@ npm run dev
 
 | Role | Email | Password |
 |------|-------|----------|
-| Admin | admin@freightzen.in | Admin@1234 |
+| Admin | admin@FreightZeb.in | Admin@1234 |
 | Warehouse | ops@bharat-logistics.in | Warehouse@1234 |
 | Dealer | fleet@rajesh-transport.in | Dealer@1234 |
 

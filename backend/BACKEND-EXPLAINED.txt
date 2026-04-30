@@ -1,5 +1,5 @@
 ================================================================================
-  FREIGHTZEN BACKEND — COMPLETE CODE EXPLANATION
+  FreightZeb BACKEND — COMPLETE CODE EXPLANATION
   Node.js + Express + Prisma + PostgreSQL + Socket.io
 ================================================================================
 
@@ -68,7 +68,7 @@ TABLE OF CONTENTS
 1. PROJECT OVERVIEW
 ================================================================================
 
-FreightZen is a logistics SaaS platform connecting:
+FreightZeb is a logistics SaaS platform connecting:
   - WAREHOUSE users  → create shipments, request bookings
   - DEALER users     → register trucks, accept/manage bookings, track deliveries
   - ADMIN            → full platform oversight
@@ -90,7 +90,7 @@ No paid third-party APIs are required. Everything runs locally.
 2. DIRECTORY STRUCTURE
 ================================================================================
 
-freightzen/
+FreightZeb/
   backend/
     src/
       config/
@@ -1526,6 +1526,6 @@ POST   /api/ml/predict                  → { prediction_type, ...fields } [AUTH
 
 ================================================================================
   END OF DOCUMENTATION
-  Generated for FreightZen Backend v1.0
+  Generated for FreightZeb Backend v1.0
   Node.js + Express + Prisma + PostgreSQL + Socket.io + ML Integration
 ================================================================================

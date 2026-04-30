@@ -42,6 +42,7 @@ enum Role {
   ADMIN
   WAREHOUSE
   DEALER
+  CARGO_DEALER
 }
 
 // ─────────────────────────────────────────────

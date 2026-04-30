@@ -10,6 +10,7 @@ import { mlService } from '@/services/ml.service'
 import { shipmentsService } from '@/services/shipments.service'
 import { trucksService } from '@/services/trucks.service'
 import { bookingsService } from '@/services/bookings.service'
+import api from '@/services/api'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
 import Input from '@/components/ui/Input'
@@ -27,6 +28,66 @@ import {
 import { useAuthStore } from '@/store/authStore'
 import { haversineKm, normalizeShipment, normalizeTruck } from '@/utils/normalizers'
 
+function useBookingRouteInfo(booking) {
+  const oLat = booking.shipment?.pickupLocation?.lat ?? booking.shipment?.originLat
+  const oLng = booking.shipment?.pickupLocation?.lng ?? booking.shipment?.originLng
+  const dLat = booking.shipment?.destination?.lat ?? booking.shipment?.destinationLat
+  const dLng = booking.shipment?.destination?.lng ?? booking.shipment?.destinationLng
+  const enabled = [oLat, oLng, dLat, dLng].every((v) => v != null && !isNaN(Number(v)))
+  return useQuery({
+    queryKey: ['route-intel', oLat, oLng, dLat, dLng],
+    queryFn: () => api.get('/maps/route-intelligence', {
+      params: { originLat: Number(oLat), originLng: Number(oLng), destLat: Number(dLat), destLng: Number(dLng) },
+    }),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+}
+
+function BookingRouteBox({ booking }) {
+  const { data, isLoading } = useBookingRouteInfo(booking)
+  const origin = booking.shipment?.pickupLocation?.city || booking.shipment?.origin || '—'
+  const dest = booking.shipment?.destination?.city || booking.shipment?.destinationLabel || '—'
+  const weightKg = booking.shipment?.weightKg ?? booking.shipment?.weight
+  const pricePerKm = booking.truck?.pricePerKm
+  const distKm = data?.distanceKm || (booking.distanceKm ? Number(booking.distanceKm) : null)
+  const estimatedRevenue = distKm && pricePerKm ? (distKm * Number(pricePerKm)).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : null
+  const trafficColor = data?.trafficDelayMin > 30 ? 'text-red-400' : data?.trafficDelayMin > 10 ? 'text-orange-400' : 'text-green-400'
+
+  return (
+    <div className="rounded-xl bg-indigo-950/60 border border-indigo-700/50 p-3 mb-3">
+      <div className="flex items-center gap-2 mb-1.5">
+        <MapPin className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+        <p className="text-xs font-semibold text-indigo-200">{origin} → {dest}</p>
+      </div>
+      <div className="flex flex-wrap gap-3 text-xs text-indigo-300 mb-1.5">
+        {weightKg && <span>⚖️ {Number(weightKg).toLocaleString()} kg</span>}
+        {estimatedRevenue && <span>💰 ₹{estimatedRevenue}</span>}
+      </div>
+      {isLoading ? (
+        <p className="text-xs text-indigo-400 animate-pulse">📏 fetching route...</p>
+      ) : data ? (
+        <div className="space-y-1">
+          <div className="flex flex-wrap gap-3 text-xs">
+            <span className="font-semibold text-indigo-200">📏 {data.distanceText || `${data.distanceKm} km`}</span>
+            <span className="text-indigo-300">⏱ {data.durationText || `${data.durationMin} min`}</span>
+            {data.trafficDurationText && (
+              <span className={`font-medium ${trafficColor}`}>
+                🚦 {data.trafficDurationText}{data.trafficDelayMin > 0 ? ` (+${data.trafficDelayMin}m)` : ''}
+              </span>
+            )}
+            {data.avgSpeedKmh && <span className="text-indigo-400">🏎 {data.avgSpeedKmh} km/h</span>}
+            {data.hasTolls && <span className="text-amber-400">⚠️ Tolls</span>}
+          </div>
+          {data.summary && <p className="text-[11px] text-indigo-400">Via {data.summary}</p>}
+          <p className="text-[10px] text-indigo-500">📍 Google Maps · live traffic</p>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function DealerRidePredictions({ bookings }) {
   const [refreshingBookingId, setRefreshingBookingId] = useState(null)
   const [refreshingAll, setRefreshingAll] = useState(false)
@@ -39,7 +100,7 @@ function DealerRidePredictions({ bookings }) {
     ['APPROVED', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'DELIVERED'].includes(booking.status)
   )
 
-  const latestPrediction = (predictions, type) => predictions?.find((prediction) => prediction.type === type)
+  const latestPrediction = (predictions, type) => predictions?.find((p) => p.type === type)
 
   const handleRefreshAll = async () => {
     if (activeBookings.length === 0) return
@@ -51,6 +112,29 @@ function DealerRidePredictions({ bookings }) {
     }
   }
 
+  const statusColors = {
+    APPROVED: 'bg-blue-900/40 text-blue-300',
+    ASSIGNED: 'bg-indigo-900/40 text-indigo-300',
+    PICKED_UP: 'bg-yellow-900/40 text-yellow-300',
+    IN_TRANSIT: 'bg-purple-900/40 text-purple-300',
+    DELIVERED: 'bg-green-900/40 text-green-300',
+  }
+
+  const delayColor = (val) => {
+    if (val == null) return 'text-gray-400'
+    if (val >= 70) return 'text-red-400'
+    if (val >= 45) return 'text-orange-400'
+    if (val >= 20) return 'text-yellow-400'
+    return 'text-green-400'
+  }
+
+  const delayBarColor = (val) => {
+    if (val >= 70) return 'bg-red-500'
+    if (val >= 45) return 'bg-orange-500'
+    if (val >= 20) return 'bg-yellow-500'
+    return 'bg-green-500'
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -58,9 +142,10 @@ function DealerRidePredictions({ bookings }) {
           Refresh All Active
         </Button>
       </div>
+
       {activeBookings.length === 0 ? (
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          No active/dealt rides yet. Predictions will auto-generate when you accept rides and add trucks.
+          No active rides yet. Predictions auto-generate when you accept a shipment.
         </p>
       ) : activeBookings.map((booking) => {
         const predictions = booking.shipment?.predictions || []
@@ -68,44 +153,113 @@ function DealerRidePredictions({ bookings }) {
         const delay = latestPrediction(predictions, 'DELAY_RISK_PERCENT')
         const fuel = latestPrediction(predictions, 'FUEL_ESTIMATE_LITERS')
         const co2 = latestPrediction(predictions, 'CO2_KG')
+        const delayVal = delay ? Number(delay.value) : null
+        const regNo = booking.truck?.registrationNo || booking.truck?.registrationNumber || '—'
+        const truckType = (booking.truck?.truckType || '').replace(/_/g, ' ')
 
         return (
-          <div key={booking.id} className="p-4 rounded-xl border border-gray-200 dark:border-gray-700">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <p className="font-medium text-gray-900 dark:text-white">
-                {booking.truck?.registrationNo || booking.truck?.registrationNumber || 'Truck'} - Booking #{booking.id.slice(-8)}
-              </p>
-              <Button
-                size="xs"
-                variant="secondary"
-                loading={refreshingBookingId === booking.id && mutation.isPending}
-                onClick={() => {
-                  setRefreshingBookingId(booking.id)
-                  mutation.mutate(booking.id)
-                }}
-              >
-                Refresh Predictions
-              </Button>
+          <div key={booking.id} className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+
+            {/* Header */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shrink-0">
+                  <Truck className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <p className="font-bold text-gray-900 dark:text-white text-sm">{regNo}</p>
+                  <p className="text-xs text-gray-500">{truckType} · Booking #{booking.id.slice(-8)}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusColors[booking.status] || 'bg-gray-100 text-gray-600'}`}>
+                  {booking.status}
+                </span>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  loading={refreshingBookingId === booking.id && mutation.isPending}
+                  onClick={() => { setRefreshingBookingId(booking.id); mutation.mutate(booking.id) }}
+                >
+                  Refresh Predictions
+                </Button>
+              </div>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-              <div>
-                <p className="text-gray-500">ETA</p>
-                <p className="font-semibold text-gray-900 dark:text-white">{eta ? `${Number(eta.value).toFixed(1)} h` : '—'}</p>
-                {eta?.modelName && <p className="text-[11px] text-gray-500">{eta.modelName} {eta.fallback ? '(heuristic)' : ''}</p>}
-              </div>
-              <div>
-                <p className="text-gray-500">Delay Risk</p>
-                <p className="font-semibold text-gray-900 dark:text-white">{delay ? `${Number(delay.value).toFixed(1)}%` : '—'}</p>
-                {delay?.confidence != null && <p className="text-[11px] text-gray-500">conf {Math.round(delay.confidence * 100)}%</p>}
-              </div>
-              <div>
-                <p className="text-gray-500">Fuel</p>
-                <p className="font-semibold text-gray-900 dark:text-white">{fuel ? `${Number(fuel.value).toFixed(1)} L` : '—'}</p>
-                {fuel?.latencyMs != null && <p className="text-[11px] text-gray-500">{fuel.latencyMs}ms</p>}
-              </div>
-              <div>
-                <p className="text-gray-500">CO₂</p>
-                <p className="font-semibold text-gray-900 dark:text-white">{co2 ? `${Number(co2.value).toFixed(1)} kg` : '—'}</p>
+
+            {/* Body */}
+            <div className="p-4">
+              {/* Google Maps route box */}
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Shipment &amp; Predictions</p>
+              <BookingRouteBox booking={booking} />
+
+              {/* 2×2 ML prediction grid */}
+              <div className="grid grid-cols-2 gap-2.5">
+
+                {/* ETA */}
+                <div className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Clock className="w-3.5 h-3.5 text-blue-500" />
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">ETA</p>
+                    {eta?.modelVersion?.includes('fallback') && <span className="text-[9px] bg-amber-100 text-amber-600 px-1 rounded ml-auto">heuristic</span>}
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {eta ? `${Number(eta.value).toFixed(1)}h` : '—'}
+                  </p>
+                  {eta?.confidence != null && (
+                    <div className="mt-1.5 space-y-0.5">
+                      <div className="h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.round(eta.confidence * 100)}%` }} />
+                      </div>
+                      <p className="text-[10px] text-gray-400">{Math.round(eta.confidence * 100)}% conf · {eta.latencyMs}ms</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Delay Risk */}
+                <div className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <AlertTriangle className="w-3.5 h-3.5 text-orange-500" />
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">Delay Risk</p>
+                  </div>
+                  <p className={`text-2xl font-bold ${delayColor(delayVal)}`}>
+                    {delayVal != null ? `${delayVal.toFixed(1)}%` : '—'}
+                  </p>
+                  {delayVal != null && (
+                    <div className="mt-1.5 space-y-0.5">
+                      <div className="h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${delayBarColor(delayVal)}`} style={{ width: `${Math.min(100, delayVal)}%` }} />
+                      </div>
+                      <p className={`text-[10px] font-semibold ${delayColor(delayVal)}`}>
+                        {delayVal >= 70 ? 'CRITICAL' : delayVal >= 45 ? 'HIGH' : delayVal >= 20 ? 'MODERATE' : 'LOW'}
+                        {delay?.confidence != null && ` · ${Math.round(delay.confidence * 100)}% conf`}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Fuel */}
+                <div className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Fuel className="w-3.5 h-3.5 text-blue-500" />
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">Fuel</p>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {fuel ? `${Number(fuel.value).toFixed(1)} L` : '—'}
+                  </p>
+                  {fuel?.latencyMs != null && <p className="text-[10px] text-gray-400 mt-1">{fuel.latencyMs}ms · ML model</p>}
+                </div>
+
+                {/* CO₂ */}
+                <div className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Zap className="w-3.5 h-3.5 text-green-500" />
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">CO₂</p>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {co2 ? `${Number(co2.value).toFixed(1)} kg` : '—'}
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-1">derived</p>
+                </div>
               </div>
             </div>
           </div>
@@ -387,8 +541,8 @@ function DelayRiskAnalyzer({ shipments }) {
   const featureContributions = pred?.feature_contributions || null
   const contributionEntries = featureContributions
     ? Object.entries(featureContributions)
-        .map(([key, value]) => ({ key, percent: Math.max(0, Math.min(100, Number(value) || 0)) }))
-        .sort((a, b) => b.percent - a.percent)
+      .map(([key, value]) => ({ key, percent: Math.max(0, Math.min(100, Number(value) || 0)) }))
+      .sort((a, b) => b.percent - a.percent)
     : []
 
   const riskBadgeColor = {
@@ -726,28 +880,28 @@ function CargoOptimizer({ trucks }) {
   })
 
   const opt = result?.result || result?.optimization || result?.data
-  const fitted  = opt?.selected_items || opt?.fittedItems  || []
+  const fitted = opt?.selected_items || opt?.fittedItems || []
   const rejected = opt?.rejected_items || opt?.rejectedItems || []
 
   const statusMeta = {
-    OPTIMAL:        { color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',  label: 'Optimal' },
-    FEASIBLE:       { color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',  label: 'Feasible' },
-    GREEDY_FALLBACK:{ color: 'bg-gray-100  text-gray-600  dark:bg-gray-700/40   dark:text-gray-300',  label: 'Greedy Fallback' },
-    EMPTY:          { color: 'bg-gray-100  text-gray-500  dark:bg-gray-700/40   dark:text-gray-400',  label: 'No Items' },
+    OPTIMAL: { color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400', label: 'Optimal' },
+    FEASIBLE: { color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400', label: 'Feasible' },
+    GREEDY_FALLBACK: { color: 'bg-gray-100  text-gray-600  dark:bg-gray-700/40   dark:text-gray-300', label: 'Greedy Fallback' },
+    EMPTY: { color: 'bg-gray-100  text-gray-500  dark:bg-gray-700/40   dark:text-gray-400', label: 'No Items' },
   }
   const optStatus = opt?.optimization_status || 'FEASIBLE'
   const statusStyle = statusMeta[optStatus] || statusMeta.FEASIBLE
 
   const REASON_LABELS = {
-    exceeds_truck_weight:      'Over weight limit',
-    exceeds_truck_volume:      'Over volume limit',
-    exceeds_truck_both:        'Over both limits',
+    exceeds_truck_weight: 'Over weight limit',
+    exceeds_truck_volume: 'Over volume limit',
+    exceeds_truck_both: 'Over both limits',
     not_selected_by_optimizer: 'Lower priority',
-    capacity_exceeded:         'Capacity full',
-    over_weight:               'Over weight limit',
-    over_volume:               'Over volume limit',
-    over_weight_and_volume:    'Over both limits',
-    lower_objective_priority:  'Lower priority',
+    capacity_exceeded: 'Capacity full',
+    over_weight: 'Over weight limit',
+    over_volume: 'Over volume limit',
+    over_weight_and_volume: 'Over both limits',
+    lower_objective_priority: 'Lower priority',
   }
   const readableReason = (r) => r?.reason_label || REASON_LABELS[r?.reason] || (r?.reason || '—').replace(/_/g, ' ')
 
@@ -755,7 +909,7 @@ function CargoOptimizer({ trucks }) {
   const capM3 = Number(truck.capacity_m3) || 0
   const weightUsed = opt?.weight_used ?? opt?.total_weight_kg ?? 0
   const volumeUsed = opt?.volume_used ?? opt?.total_volume_m3 ?? 0
-  const remaining  = opt?.remaining_capacity || { weight_kg: capKg - weightUsed, volume_m3: capM3 - volumeUsed }
+  const remaining = opt?.remaining_capacity || { weight_kg: capKg - weightUsed, volume_m3: capM3 - volumeUsed }
 
   const onTruckSelect = (event) => {
     const truckId = event.target.value

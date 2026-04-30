@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Truck, Package, DollarSign, CheckCircle, XCircle, Upload } from 'lucide-react'
+import { ArrowLeft, Truck, Package, DollarSign, CheckCircle, XCircle, Upload, Brain, RefreshCw, MapPin, AlertTriangle, Fuel, Wind, Ruler } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { bookingsService } from '@/services/bookings.service'
+import { mlService } from '@/services/ml.service'
 import { trackingService } from '@/services/tracking.service'
 import { uploadsService } from '@/services/uploads.service'
 import { useAuthStore } from '@/store/authStore'
@@ -14,9 +15,9 @@ import Modal from '@/components/ui/Modal'
 import Select from '@/components/ui/Select'
 import StatusBadge from '@/components/shared/StatusBadge'
 import { SkeletonCard } from '@/components/ui/Skeleton'
-import { formatDate, formatDateTime, formatCurrency, formatRelative, formatWeight } from '@/utils/formatters'
+import { formatDate, formatDateTime, formatCurrency, formatRelative, formatWeight, formatDistance } from '@/utils/formatters'
 import { BOOKING_STEPS } from '@/utils/constants'
-import { normalizeBooking, normalizeTrackingLog } from '@/utils/normalizers'
+import { normalizeBooking, normalizeTrackingLog, normalizePrediction } from '@/utils/normalizers'
 
 const STATUS_TRANSITIONS = {
   ADMIN: {
@@ -54,15 +55,14 @@ function StatusTimeline({ status }) {
             {i < steps.length - 1 && (
               <div className={`absolute left-3.5 top-7 bottom-0 w-0.5 ${isPast ? 'bg-green-400' : 'bg-gray-200 dark:bg-gray-700'}`} />
             )}
-            <div className={`relative z-10 w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-colors ${
-              isFailed && isCurrent ? 'bg-red-100 border-2 border-red-500' :
+            <div className={`relative z-10 w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-colors ${isFailed && isCurrent ? 'bg-red-100 border-2 border-red-500' :
               isPast ? 'bg-green-500' :
-              isCurrent ? 'bg-blue-600 border-2 border-blue-200' :
-              'bg-gray-100 dark:bg-gray-700 border-2 border-gray-300 dark:border-gray-600'
-            }`}>
+                isCurrent ? 'bg-blue-600 border-2 border-blue-200' :
+                  'bg-gray-100 dark:bg-gray-700 border-2 border-gray-300 dark:border-gray-600'
+              }`}>
               {isPast ? <CheckCircle className="w-4 h-4 text-white" /> :
-               isCurrent && !isFailed ? <div className="w-2 h-2 rounded-full bg-white" /> :
-               <div className="w-2 h-2 rounded-full bg-gray-400" />}
+                isCurrent && !isFailed ? <div className="w-2 h-2 rounded-full bg-white" /> :
+                  <div className="w-2 h-2 rounded-full bg-gray-400" />}
             </div>
             <div className="pt-0.5">
               <p className={`text-sm font-medium ${isCurrent ? 'text-blue-600 dark:text-blue-400' : isPast ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500'}`}>
@@ -119,6 +119,106 @@ function ProofUploadModal({ booking, onClose }) {
   )
 }
 
+function MLPredictionsPanel({ booking, onRefresh, isRefreshing }) {
+  const predictions = (booking?.shipment?.predictions || []).map(normalizePrediction)
+  const byType = Object.fromEntries(predictions.map((p) => [p.predictionType, p]))
+
+  const eta = byType['ETA_HOURS']
+  const delay = byType['DELAY_RISK_PERCENT']
+  const fuel = byType['FUEL_ESTIMATE_LITERS']
+  const co2 = byType['CO2_KG']
+
+  const delayValue = delay ? Number(delay.value ?? delay.result?.delay_probability ?? 0) : null
+  const delayRiskLevel = delayValue === null ? null
+    : delayValue >= 70 ? { label: 'CRITICAL', color: 'text-red-600 dark:text-red-400' }
+      : delayValue >= 45 ? { label: 'HIGH', color: 'text-orange-500 dark:text-orange-400' }
+        : delayValue >= 20 ? { label: 'MODERATE', color: 'text-yellow-600 dark:text-yellow-400' }
+          : { label: 'LOW', color: 'text-green-600 dark:text-green-400' }
+
+  const stats = [
+    {
+      icon: <Brain className="w-4 h-4 text-purple-500" />,
+      label: 'ETA',
+      value: eta ? `${Number(eta.value).toFixed(1)} h` : '—',
+      sub: eta?.modelName || 'delivery_eta',
+      latency: eta?.latencyMs,
+      fallback: eta?.fallback,
+    },
+    {
+      icon: <AlertTriangle className="w-4 h-4 text-orange-500" />,
+      label: 'Delay Risk',
+      value: delayValue !== null ? `${delayValue.toFixed(1)}%` : '—',
+      sub: delayRiskLevel ? <span className={delayRiskLevel.color}>{delayRiskLevel.label}</span> : '—',
+      latency: delay?.latencyMs,
+      fallback: delay?.fallback,
+    },
+    {
+      icon: <Fuel className="w-4 h-4 text-blue-500" />,
+      label: 'Fuel',
+      value: fuel ? `${Number(fuel.value).toFixed(1)} L` : '—',
+      sub: fuel?.modelName || 'fuel_estimation',
+      latency: fuel?.latencyMs,
+      fallback: fuel?.fallback,
+    },
+    {
+      icon: <Wind className="w-4 h-4 text-green-500" />,
+      label: 'CO₂',
+      value: co2 ? `${Number(co2.value).toFixed(1)} kg` : '—',
+      sub: 'derived',
+      latency: null,
+      fallback: false,
+    },
+    {
+      icon: <Ruler className="w-4 h-4 text-indigo-500" />,
+      label: 'Distance',
+      value: booking?.distanceKm ? `${Number(booking.distanceKm).toFixed(1)} km` : '—',
+      sub: 'route calc',
+      latency: null,
+      fallback: false,
+    },
+  ]
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Brain className="w-5 h-5 text-purple-500" />
+          <h3 className="font-semibold text-gray-900 dark:text-white">ML Predictions</h3>
+        </div>
+        <Button size="sm" variant="secondary" onClick={onRefresh} loading={isRefreshing}>
+          <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+        </Button>
+      </div>
+
+      {predictions.length === 0 && !isRefreshing ? (
+        <div className="text-center py-4">
+          <p className="text-sm text-gray-400 mb-3">No predictions yet.</p>
+          <Button size="sm" onClick={onRefresh} loading={isRefreshing}>Generate Predictions</Button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3">
+          {stats.map((s) => (
+            <div key={s.label} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-700/30">
+              <div className="flex items-center gap-2">
+                {s.icon}
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{s.label}</p>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">{s.value}</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-gray-400">{s.sub}</p>
+                {s.latency && <p className="text-xs text-gray-400">{s.latency}ms</p>}
+                {s.fallback && <p className="text-xs text-amber-500">heuristic</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 export default function BookingDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -152,6 +252,15 @@ export default function BookingDetailPage() {
       qc.invalidateQueries({ queryKey: ['notifications'] })
     },
     onError: (err) => toast.error(err.response?.data?.message || 'Update failed'),
+  })
+
+  const refreshPredictionsMutation = useMutation({
+    mutationFn: () => mlService.predictBooking(id),
+    onSuccess: () => {
+      toast.success('Predictions refreshed!')
+      qc.invalidateQueries({ queryKey: ['bookings', id] })
+    },
+    onError: () => toast.error('Failed to refresh — is the ML service running?'),
   })
 
   const { data: trackingData } = useQuery({
@@ -295,6 +404,12 @@ export default function BookingDetailPage() {
             <Card.Title className="mb-4">Booking Progress</Card.Title>
             <StatusTimeline status={booking.status} />
           </Card>
+
+          <MLPredictionsPanel
+            booking={booking}
+            onRefresh={() => refreshPredictionsMutation.mutate()}
+            isRefreshing={refreshPredictionsMutation.isPending}
+          />
 
           {booking.invoice && (
             <Card>

@@ -9,7 +9,7 @@ BASE_URL = "http://localhost:8000"
 
 def test_v2_endpoints():
     print("\n" + "="*70)
-    print("Testing FreightZen V2 ML API Endpoints")
+    print("Testing FreightZeb V2 ML API Endpoints")
     print("="*70)
     
     # Test 1: Truck Recommendation V2

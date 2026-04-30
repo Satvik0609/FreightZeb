@@ -11,4 +11,5 @@ export const trucksService = {
   updateLocation: (id, lat, lng) => api.patch(`/trucks/${id}/location`, { lat, lng }),
   delete: (id) => api.delete(`/trucks/${id}`),
   optimizeLoading: (data) => api.post('/trucks/optimize-loading', data),
+  shipmentMatches: (id, params = {}) => api.get(`/trucks/${id}/shipment-matches`, { params }),
 }

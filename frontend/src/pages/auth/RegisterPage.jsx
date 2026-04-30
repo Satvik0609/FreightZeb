@@ -58,13 +58,13 @@ export default function RegisterPage() {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 shadow-lg mb-4">
             <Zap className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-white">FreightZen</h1>
+          <h1 className="text-3xl font-bold text-white">FreightZeb</h1>
           <p className="text-blue-300 mt-1 text-sm">AI-Powered Logistics Platform</p>
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-1">Create account</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">Join FreightZen today</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">Join FreightZeb today</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-3">

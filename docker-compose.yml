@@ -10,18 +10,18 @@ services:
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
-    container_name: freightzen_db
+    container_name: FreightZeb_db
     restart: unless-stopped
     environment:
-      POSTGRES_USER:     ${POSTGRES_USER:-freightzen}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-freightzen_secret}
-      POSTGRES_DB:       ${POSTGRES_DB:-freightzen}
+      POSTGRES_USER:     ${POSTGRES_USER:-FreightZeb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-FreightZeb_secret}
+      POSTGRES_DB:       ${POSTGRES_DB:-FreightZeb}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-freightzen}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-FreightZeb}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -36,7 +36,7 @@ services:
     build:
       context: ./ml/service
       dockerfile: Dockerfile
-    container_name: freightzen_ml
+    container_name: FreightZeb_ml
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -66,13 +66,13 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: freightzen_migrate
+    container_name: FreightZeb_migrate
     restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-freightzen}:${POSTGRES_PASSWORD:-freightzen_secret}@postgres:5432/${POSTGRES_DB:-freightzen}?schema=public
+      DATABASE_URL: postgresql://${POSTGRES_USER:-FreightZeb}:${POSTGRES_PASSWORD:-FreightZeb_secret}@postgres:5432/${POSTGRES_DB:-FreightZeb}?schema=public
     command: ["npx", "prisma", "migrate", "deploy"]
 
   # ── Express API ────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: freightzen_api
+    container_name: FreightZeb_api
     restart: unless-stopped
     ports:
       - "${PORT:-5000}:5000"
@@ -89,7 +89,7 @@ services:
     environment:
       NODE_ENV:           production
       PORT:               5000
-      DATABASE_URL:       postgresql://${POSTGRES_USER:-freightzen}:${POSTGRES_PASSWORD:-freightzen_secret}@postgres:5432/${POSTGRES_DB:-freightzen}?schema=public
+      DATABASE_URL:       postgresql://${POSTGRES_USER:-FreightZeb}:${POSTGRES_PASSWORD:-FreightZeb_secret}@postgres:5432/${POSTGRES_DB:-FreightZeb}?schema=public
       ML_SERVICE_URL:     http://ml-service:8000
       ML_SERVICE_API_KEY: ${ML_SERVICE_API_KEY:-dev-ml-service-key}
       FRONTEND_URL:       ${FRONTEND_URL:-http://localhost:5173}

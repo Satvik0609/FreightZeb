@@ -18,7 +18,7 @@ export const useAuthStore = create(
         set((state) => ({ user: { ...state.user, ...data } })),
     }),
     {
-      name: 'freightzen-auth',
+      name: 'FreightZeb-auth',
       partialize: (state) => ({ user: state.user, token: state.token, isAuthenticated: state.isAuthenticated }),
     }
   )

@@ -1,20 +1,18 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Package, Truck, BookOpen, MapPin,
-  BarChart2, Brain, Bell, FileText, Users, ChevronLeft, Zap
+  BarChart2, Brain, FileText, Users, ChevronLeft, Zap
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
-import { useNotificationStore } from '@/store/notificationStore'
 
 const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'Dashboard', roles: ['ADMIN', 'WAREHOUSE', 'DEALER'] },
-  { path: '/shipments', icon: Package, label: 'Shipments', roles: ['ADMIN', 'WAREHOUSE'] },
+  { path: '/shipments', icon: Package, label: 'Shipments', roles: ['ADMIN', 'WAREHOUSE', 'DEALER'] },
   { path: '/trucks', icon: Truck, label: 'Trucks', roles: ['ADMIN', 'DEALER'] },
   { path: '/bookings', icon: BookOpen, label: 'Bookings', roles: ['ADMIN', 'WAREHOUSE', 'DEALER'] },
   { path: '/tracking', icon: MapPin, label: 'Live Tracking', roles: ['ADMIN', 'WAREHOUSE', 'DEALER'] },
   { path: '/analytics', icon: BarChart2, label: 'Analytics', roles: ['ADMIN', 'WAREHOUSE', 'DEALER'] },
   { path: '/ml-insights', icon: Brain, label: 'ML Insights', roles: ['ADMIN', 'WAREHOUSE', 'DEALER'] },
-  { path: '/notifications', icon: Bell, label: 'Notifications', roles: ['ADMIN', 'WAREHOUSE', 'DEALER'] },
   { path: '/invoices', icon: FileText, label: 'Invoices', roles: ['ADMIN', 'WAREHOUSE'] },
   { path: '/admin/users', icon: Users, label: 'Users', roles: ['ADMIN'] },
   { path: '/admin/dashboard', icon: BarChart2, label: 'Admin Dashboard', roles: ['ADMIN'] },
@@ -22,7 +20,6 @@ const navItems = [
 
 export default function Sidebar({ collapsed, onCollapse }) {
   const { user } = useAuthStore()
-  const { unreadCount } = useNotificationStore()
 
   const filtered = navItems.filter((item) => item.roles.includes(user?.role))
 
@@ -37,7 +34,7 @@ export default function Sidebar({ collapsed, onCollapse }) {
             <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center">
               <Zap className="w-4 h-4 text-white" />
             </div>
-            <span className="font-bold text-white text-lg">FreightZen</span>
+            <span className="font-bold text-white text-lg">FreightZeb</span>
           </div>
         )}
         {collapsed && (
@@ -72,14 +69,6 @@ export default function Sidebar({ collapsed, onCollapse }) {
                 <item.icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-white' : 'text-gray-400 group-hover:text-white'}`} />
                 {!collapsed && (
                   <span className="text-sm font-medium">{item.label}</span>
-                )}
-                {item.label === 'Notifications' && unreadCount > 0 && (
-                  <span className={`
-                    ${collapsed ? 'absolute -top-1 -right-1' : 'ml-auto'}
-                    bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold
-                  `}>
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </span>
                 )}
                 {collapsed && (
                   <div className="absolute left-full ml-2 px-2 py-1 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap shadow-xl border border-gray-700 z-50">

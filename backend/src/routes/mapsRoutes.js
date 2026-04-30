@@ -4,10 +4,10 @@
  * API keys stay server-side — clients never see them.
  */
 
-const express     = require('express');
+const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
 const { asyncHandler } = require('../helpers/errors');
-const { getDirections }  = require('../services/mapsService');
+const { getDirections, getRouteIntelligence } = require('../services/mapsService');
 
 const router = express.Router();
 
@@ -15,11 +15,7 @@ router.use(protect);
 
 /**
  * GET /api/maps/directions
- * Query params: originLat, originLng, destLat, destLng  (all required, floats)
- *
- * Response:
- *   { success, routePath: [[lat,lng],...], distanceKm, durationMin,
- *     distanceText, durationText, startAddress, endAddress }
+ * Basic route — polyline + distance + duration (cached 30 min)
  */
 router.get(
   '/directions',
@@ -28,10 +24,7 @@ router.get(
     const [oLat, oLng, dLat, dLng] = [originLat, originLng, destLat, destLng].map(Number);
 
     if ([oLat, oLng, dLat, dLng].some((v) => !Number.isFinite(v))) {
-      return res.status(400).json({
-        success: false,
-        message: 'originLat, originLng, destLat, destLng must all be numeric.',
-      });
+      return res.status(400).json({ success: false, message: 'originLat, originLng, destLat, destLng must all be numeric.' });
     }
 
     try {
@@ -40,8 +33,35 @@ router.get(
     } catch (err) {
       const isConfig = err.message?.includes('not configured');
       return res.status(isConfig ? 503 : 502).json({
-        success: false,
-        message: err.message,
+        success: false, message: err.message,
+        code: isConfig ? 'MAPS_KEY_MISSING' : 'MAPS_API_ERROR',
+      });
+    }
+  }),
+);
+
+/**
+ * GET /api/maps/route-intelligence
+ * Full route data with live traffic, steps, delay, avg speed, tolls, warnings
+ * Cached 5 min (traffic changes frequently)
+ */
+router.get(
+  '/route-intelligence',
+  asyncHandler(async (req, res) => {
+    const { originLat, originLng, destLat, destLng } = req.query;
+    const [oLat, oLng, dLat, dLng] = [originLat, originLng, destLat, destLng].map(Number);
+
+    if ([oLat, oLng, dLat, dLng].some((v) => !Number.isFinite(v))) {
+      return res.status(400).json({ success: false, message: 'originLat, originLng, destLat, destLng must all be numeric.' });
+    }
+
+    try {
+      const result = await getRouteIntelligence(oLat, oLng, dLat, dLng);
+      return res.json({ success: true, ...result });
+    } catch (err) {
+      const isConfig = err.message?.includes('not configured');
+      return res.status(isConfig ? 503 : 502).json({
+        success: false, message: err.message,
         code: isConfig ? 'MAPS_KEY_MISSING' : 'MAPS_API_ERROR',
       });
     }

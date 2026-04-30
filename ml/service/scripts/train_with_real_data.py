@@ -1,7 +1,7 @@
 """
 train_with_real_data.py
 =======================
-Trains all 6 FreightZen V2 ML models using real Kaggle datasets.
+Trains all 6 FreightZeb V2 ML models using real Kaggle datasets.
 
 DATASETS REQUIRED (download first with: python download_datasets.py)
 ---------------------------------------------------------------------
@@ -149,11 +149,11 @@ def train_route_optimizer(force: bool = False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train all 6 FreightZen ML models with real data")
+    parser = argparse.ArgumentParser(description="Train all 6 FreightZeb ML models with real data")
     parser.add_argument("--force", action="store_true", help="Force retrain even if saved models exist")
     args = parser.parse_args()
 
-    log.info("FreightZen ML — Training all 6 models with real Kaggle datasets")
+    log.info("FreightZeb ML — Training all 6 models with real Kaggle datasets")
     log.info("force_retrain=%s", args.force)
 
     # Check datasets

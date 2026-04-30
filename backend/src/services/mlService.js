@@ -142,6 +142,31 @@ function _fuelFallback(data) {
   };
 }
 
+function _delayFallback(data, latencyMs = 0) {
+  // Heuristic: base risk from distance + weather + traffic
+  const distanceRisk = Math.min(30, (data.distance_km || 0) / 100);
+  const weatherRisk = { CLEAR: 0, CLOUDY: 3, RAIN: 12, STORM: 25, FOG: 18, SNOW: 22 }[data.weather_condition] ?? 5;
+  const trafficRisk = { LIGHT: 0, MODERATE: 8, HEAVY: 18, SEVERE: 28 }[data.traffic_condition] ?? 8;
+  const timeRisk = { MORNING: 6, AFTERNOON: 2, EVENING: 8, NIGHT: 4 }[data.time_of_day] ?? 4;
+  const probability = Math.min(95, Math.max(2, distanceRisk + weatherRisk + trafficRisk + timeRisk));
+  const risk_level = probability <= 25 ? 'LOW' : probability <= 50 ? 'MODERATE' : probability <= 75 ? 'HIGH' : 'CRITICAL';
+  return {
+    delay_probability: parseFloat(probability.toFixed(2)),
+    risk_level,
+    confidence: 0.45,
+    fallback: true,
+    source: 'heuristic',
+    model_name: 'delay_risk',
+    latency_ms: latencyMs,
+    feature_contributions: {
+      distance: parseFloat(distanceRisk.toFixed(1)),
+      weather: parseFloat(weatherRisk.toFixed(1)),
+      traffic: parseFloat(trafficRisk.toFixed(1)),
+      time_of_day: parseFloat(timeRisk.toFixed(1)),
+    },
+  };
+}
+
 function _clusterFallback(shipments) {
   return {
     n_clusters: 1,
@@ -184,7 +209,7 @@ class MLService {
       case 'truck': return _truckFallback(payload);
       case 'delivery': return _deliveryFallback(payload);
       case 'fuel': return _fuelFallback(payload);
-      case 'delay': throw new Error('Delay prediction requires the ML service — no offline fallback available');
+      case 'delay': return _delayFallback(payload);
       case 'cluster': return _clusterFallback(payload.shipments || []);
       default:
         throw new Error(`No fallback for prediction_type: ${type}`);
@@ -227,8 +252,14 @@ class MLService {
 
   async predictDelayRisk(data, requestId) {
     const startedAt = Date.now();
-    const res = await _post('/predict-delay-risk', data, requestId);
-    return { ...res, fallback: false, source: 'ml_service', model_name: 'delay_risk', latency_ms: Date.now() - startedAt };
+    try {
+      const res = await _post('/predict-delay-risk', data, requestId);
+      return { ...res, fallback: false, source: 'ml_service', model_name: 'delay_risk', latency_ms: Date.now() - startedAt };
+    } catch (err) {
+      logger.warn(`ML delay risk failed: ${err.message} — using heuristic fallback`);
+      _recordMetrics('/predict-delay-risk', { fallback: true, failed: false, latencyMs: Date.now() - startedAt });
+      return _delayFallback(data, Date.now() - startedAt);
+    }
   }
 
   async estimateFuel(data, requestId) {

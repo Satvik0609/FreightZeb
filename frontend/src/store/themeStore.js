@@ -16,6 +16,6 @@ export const useThemeStore = create(
         set({ theme })
       },
     }),
-    { name: 'freightzen-theme' }
+    { name: 'FreightZeb-theme' }
   )
 )
