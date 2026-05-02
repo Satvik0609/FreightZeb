@@ -5,6 +5,27 @@
 
 ---
 
+## Current Project Status (May 2026)
+
+Recent implementation completed in this project:
+
+- Warehouse flow is active end-to-end: shipments, bookings, invoices, notifications.
+- Dealer flow includes booking status actions, live tracking, truck maintenance toggle, and `Dealer Earnings`.
+- Admin module includes:
+  - `Admin Dashboard`
+  - `Users`
+  - `Finance Ops`
+  - `Audit Logs`
+  - `System Health`
+  - Admin view of `Dealer Earnings`
+- New analytics/admin APIs added for earnings and operations monitoring.
+- Real-data workflow enabled:
+  - `setup:dev` does not seed fake data.
+  - `setup:demo` is available when demo seed data is needed.
+  - `admin:bootstrap` script creates/updates real admin user.
+
+---
+
 ## Table of Contents
 
 1. [System Architecture](#1-system-architecture)
@@ -399,6 +420,16 @@ npm run dev
 | Warehouse | ops@bharat-logistics.in | Warehouse@1234 |
 | Dealer | fleet@rajesh-transport.in | Dealer@1234 |
 
+For production-like development without fake seed data:
+
+```powershell
+cd backend
+npm run setup:dev
+npm run admin:bootstrap
+```
+
+Use `npm run setup:demo` only when you explicitly want seeded demo records.
+
 ### Option C — Docker (one command)
 ```bash
 # from project root
@@ -600,6 +631,8 @@ APPROVED  → ASSIGNED → PICKED_UP → IN_TRANSIT → DELIVERED / CANCELLED
 |--------|------|------|------|-------------|
 | `GET` | `/api/analytics/warehouse` | ✅ | WAREHOUSE, ADMIN | Warehouse dashboard stats |
 | `GET` | `/api/analytics/dealer` | ✅ | DEALER, ADMIN | Dealer / fleet dashboard stats |
+| `GET` | `/api/analytics/dealer/earnings` | ✅ | DEALER, ADMIN | Dealer earnings KPIs + monthly trends + trip profitability |
+| `GET` | `/api/analytics/admin/earnings` | ✅ | ADMIN | Platform dealer earnings intelligence for admin |
 | `GET` | `/api/analytics/admin` | ✅ | ADMIN | Platform-wide stats |
 
 **Warehouse analytics response:**
@@ -672,6 +705,9 @@ All admin routes require role `ADMIN`.
 | `PATCH` | `/api/admin/users/:id/role` | ✅ | ADMIN | Change user role |
 | `PATCH` | `/api/admin/users/:id/toggle` | ✅ | ADMIN | Activate / deactivate user |
 | `DELETE` | `/api/admin/users/:id` | ✅ | ADMIN | Delete user |
+| `GET` | `/api/admin/finance/summary` | ✅ | ADMIN | Finance Ops KPIs (revenue + invoice status summaries) |
+| `GET` | `/api/admin/audit-logs` | ✅ | ADMIN | Aggregated platform audit stream |
+| `GET` | `/api/admin/system-health` | ✅ | ADMIN | Runtime health (API, DB latency, memory, ML circuit) |
 
 ---
 
