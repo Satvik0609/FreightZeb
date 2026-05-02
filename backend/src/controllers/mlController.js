@@ -313,7 +313,7 @@ const predictForBooking = asyncHandler(async (req, res) => {
     orderBy: { createdAt: 'desc' },
   });
 
-  res.json({ success: true, bookingId: booking.id, shipmentId: booking.shipmentId, predictions, conditions });
+  res.json({ success: true, bookingId: booking.id, shipmentId: booking.shipmentId, predictions });
 });
 
 const predictForBookingsBatch = asyncHandler(async (req, res) => {

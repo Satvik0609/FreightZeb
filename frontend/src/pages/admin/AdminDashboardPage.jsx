@@ -14,8 +14,15 @@ export default function AdminDashboardPage() {
     staleTime: 5 * 60 * 1000,
   })
 
-  const stats = data?.stats || data?.data || {}
-  const revenue = data?.revenueByMonth || data?.data?.revenueByMonth || []
+  const analytics = data?.analytics || data?.data || {}
+  const revenueByMonth = data?.revenueByMonth || data?.data?.revenueByMonth || []
+  const stats = {
+    totalUsers: analytics?.users?.total || 0,
+    totalShipments: analytics?.shipments?.total || 0,
+    totalTrucks: analytics?.trucks?.total || 0,
+    totalRevenue: revenueByMonth.reduce((sum, row) => sum + (Number(row?.revenue) || 0), 0),
+  }
+  const revenue = revenueByMonth
   const shipments = data?.shipmentTrend || data?.data?.shipmentTrend || []
 
   const metrics = [

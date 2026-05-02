@@ -43,6 +43,26 @@ function bookingRevenue(booking) {
     );
 }
 
+const OPERATING_COST_PER_KM = {
+    SMALL_VAN: 8,
+    CONTAINER_20FT: 19,
+    CONTAINER_32FT: 25,
+    FLATBED_TRAILER: 28,
+    REEFER: 35,
+};
+
+function bookingDistanceKm(booking) {
+    const n = Number(booking?.distanceKm);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function bookingOperatingCost(booking) {
+    const distanceKm = bookingDistanceKm(booking);
+    const truckType = booking?.truck?.truckType;
+    const rate = OPERATING_COST_PER_KM[truckType] || 22;
+    return Number((distanceKm * rate).toFixed(2));
+}
+
 function seriesFromRecords(records, months, opts = {}) {
     const { dateKey = 'createdAt', valueGetter = () => 1, valueKey = 'count' } = opts;
     const buckets = Object.fromEntries(months.map((m) => [m, 0]));
@@ -229,6 +249,232 @@ async function getDealerAnalytics(req, res, next) {
     }
 }
 
+// ── Dealer earnings ───────────────────────────────────────────────────────────
+async function getDealerEarnings(req, res, next) {
+    try {
+        const dealerId = req.user.id;
+        const months = buildMonthRange(12);
+
+        const deliveredBookings = await prisma.booking.findMany({
+            where: { dealerId, status: 'DELIVERED' },
+            select: {
+                id: true,
+                shipmentId: true,
+                truckId: true,
+                distanceKm: true,
+                pricing: true,
+                deliveredAt: true,
+                createdAt: true,
+                shipment: {
+                    select: {
+                        pickupLocation: true,
+                        destination: true,
+                        weightKg: true,
+                    },
+                },
+                truck: {
+                    select: {
+                        registrationNo: true,
+                        truckType: true,
+                    },
+                },
+                warehouse: {
+                    select: {
+                        name: true,
+                        company: true,
+                    },
+                },
+                invoice: {
+                    select: {
+                        status: true,
+                        invoiceNo: true,
+                    },
+                },
+            },
+            orderBy: { deliveredAt: 'desc' },
+        });
+
+        const rows = deliveredBookings.map((booking) => {
+            const revenue = bookingRevenue(booking);
+            const operatingCost = bookingOperatingCost(booking);
+            const profit = Number((revenue - operatingCost).toFixed(2));
+            const marginPct = revenue > 0 ? Number(((profit / revenue) * 100).toFixed(2)) : 0;
+            return {
+                id: booking.id,
+                shipmentId: booking.shipmentId,
+                truckId: booking.truckId,
+                truckRegistrationNo: booking.truck?.registrationNo || null,
+                truckType: booking.truck?.truckType || null,
+                warehouseName: booking.warehouse?.name || null,
+                warehouseCompany: booking.warehouse?.company || null,
+                deliveredAt: booking.deliveredAt || null,
+                distanceKm: bookingDistanceKm(booking),
+                revenue,
+                operatingCost,
+                profit,
+                marginPct,
+                invoiceStatus: booking.invoice?.status || null,
+                invoiceNo: booking.invoice?.invoiceNo || null,
+                shipment: booking.shipment || null,
+            };
+        });
+
+        const totalRevenue = Number(rows.reduce((sum, row) => sum + row.revenue, 0).toFixed(2));
+        const totalOperatingCost = Number(rows.reduce((sum, row) => sum + row.operatingCost, 0).toFixed(2));
+        const totalProfit = Number((totalRevenue - totalOperatingCost).toFixed(2));
+        const avgProfitMarginPct = totalRevenue > 0 ? Number(((totalProfit / totalRevenue) * 100).toFixed(2)) : 0;
+        const totalDistanceKm = Number(rows.reduce((sum, row) => sum + row.distanceKm, 0).toFixed(2));
+
+        const monthlyRevenue = seriesFromRecords(rows, months, {
+            dateKey: 'deliveredAt',
+            valueGetter: (row) => row.revenue,
+            valueKey: 'revenue',
+        });
+        const monthlyCosts = seriesFromRecords(rows, months, {
+            dateKey: 'deliveredAt',
+            valueGetter: (row) => row.operatingCost,
+            valueKey: 'operatingCost',
+        });
+        const monthlyEarnings = monthlyRevenue.map((month, i) => {
+            const operatingCost = Number(monthlyCosts[i].operatingCost.toFixed(2));
+            return {
+                ...month,
+                operatingCost,
+                profit: Number((month.revenue - operatingCost).toFixed(2)),
+            };
+        });
+
+        res.json({
+            success: true,
+            metrics: {
+                deliveredTrips: rows.length,
+                totalDistanceKm,
+                totalRevenue,
+                totalOperatingCost,
+                totalProfit,
+                avgProfitMarginPct,
+            },
+            monthlyEarnings,
+            bookings: rows.slice(0, 50),
+            costModel: {
+                source: 'heuristic_per_km_by_truck_type',
+                ratesInrPerKm: OPERATING_COST_PER_KM,
+            },
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+// ── Admin dealer-earnings intelligence ────────────────────────────────────────
+async function getAdminEarnings(req, res, next) {
+    try {
+        const months = buildMonthRange(12);
+        const deliveredBookings = await prisma.booking.findMany({
+            where: { status: 'DELIVERED' },
+            select: {
+                id: true,
+                dealerId: true,
+                distanceKm: true,
+                pricing: true,
+                deliveredAt: true,
+                dealer: { select: { id: true, name: true, email: true, company: true } },
+                truck: { select: { truckType: true } },
+                invoice: { select: { status: true } },
+            },
+        });
+
+        const rows = deliveredBookings.map((booking) => {
+            const revenue = bookingRevenue(booking);
+            const operatingCost = bookingOperatingCost(booking);
+            const profit = Number((revenue - operatingCost).toFixed(2));
+            const marginPct = revenue > 0 ? Number(((profit / revenue) * 100).toFixed(2)) : 0;
+            return {
+                id: booking.id,
+                dealerId: booking.dealerId,
+                dealer: booking.dealer || null,
+                deliveredAt: booking.deliveredAt,
+                revenue,
+                operatingCost,
+                profit,
+                marginPct,
+                invoiceStatus: booking.invoice?.status || null,
+            };
+        });
+
+        const dealerAggMap = new Map();
+        rows.forEach((row) => {
+            const current = dealerAggMap.get(row.dealerId) || {
+                dealerId: row.dealerId,
+                dealerName: row.dealer?.name || 'Unknown',
+                dealerEmail: row.dealer?.email || null,
+                dealerCompany: row.dealer?.company || null,
+                deliveredTrips: 0,
+                revenue: 0,
+                operatingCost: 0,
+                profit: 0,
+                payoutEligibleTrips: 0,
+            };
+            current.deliveredTrips += 1;
+            current.revenue += row.revenue;
+            current.operatingCost += row.operatingCost;
+            current.profit += row.profit;
+            if (row.invoiceStatus === 'PAID') current.payoutEligibleTrips += 1;
+            dealerAggMap.set(row.dealerId, current);
+        });
+
+        const dealerBreakdown = Array.from(dealerAggMap.values()).map((d) => {
+            const marginPct = d.revenue > 0 ? Number(((d.profit / d.revenue) * 100).toFixed(2)) : 0;
+            return {
+                ...d,
+                revenue: Number(d.revenue.toFixed(2)),
+                operatingCost: Number(d.operatingCost.toFixed(2)),
+                profit: Number(d.profit.toFixed(2)),
+                marginPct,
+            };
+        });
+
+        const monthlyProfit = seriesFromRecords(rows, months, {
+            dateKey: 'deliveredAt',
+            valueGetter: (row) => row.profit,
+            valueKey: 'profit',
+        });
+
+        const topDealers = [...dealerBreakdown]
+            .sort((a, b) => b.profit - a.profit)
+            .slice(0, 5);
+        const lowMarginDealers = [...dealerBreakdown]
+            .filter((d) => d.deliveredTrips >= 1)
+            .sort((a, b) => a.marginPct - b.marginPct)
+            .slice(0, 5);
+
+        const totalRevenue = Number(rows.reduce((s, r) => s + r.revenue, 0).toFixed(2));
+        const totalOperatingCost = Number(rows.reduce((s, r) => s + r.operatingCost, 0).toFixed(2));
+        const totalProfit = Number((totalRevenue - totalOperatingCost).toFixed(2));
+        const avgMarginPct = totalRevenue > 0 ? Number(((totalProfit / totalRevenue) * 100).toFixed(2)) : 0;
+        const payoutEligibleTrips = dealerBreakdown.reduce((s, d) => s + d.payoutEligibleTrips, 0);
+
+        res.json({
+            success: true,
+            metrics: {
+                activeDealers: dealerBreakdown.length,
+                deliveredTrips: rows.length,
+                totalRevenue,
+                totalOperatingCost,
+                totalProfit,
+                avgMarginPct,
+                payoutEligibleTrips,
+            },
+            monthlyProfit,
+            topDealers,
+            lowMarginDealers,
+            dealerBreakdown,
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
 // ── Admin analytics ──────────────────────────────────────────────────────────
 async function getAdminAnalytics(req, res, next) {
     try {
@@ -313,4 +559,4 @@ async function getAdminAnalytics(req, res, next) {
     }
 }
 
-module.exports = { getWarehouseAnalytics, getDealerAnalytics, getAdminAnalytics };
+module.exports = { getWarehouseAnalytics, getDealerAnalytics, getDealerEarnings, getAdminEarnings, getAdminAnalytics };

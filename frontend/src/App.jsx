@@ -22,11 +22,15 @@ const BookingsPage = lazy(() => import('@/pages/BookingsPage'))
 const BookingDetailPage = lazy(() => import('@/pages/BookingDetailPage'))
 const TrackingPage = lazy(() => import('@/pages/TrackingPage'))
 const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage'))
+const EarningsPage = lazy(() => import('@/pages/EarningsPage'))
 const MLInsightsPage = lazy(() => import('@/pages/MLInsightsPage'))
 const NotificationsPage = lazy(() => import('@/pages/NotificationsPage'))
 const InvoicesPage = lazy(() => import('@/pages/InvoicesPage'))
 const UsersPage = lazy(() => import('@/pages/admin/UsersPage'))
 const AdminDashboardPage = lazy(() => import('@/pages/admin/AdminDashboardPage'))
+const FinancePage = lazy(() => import('@/pages/admin/FinancePage'))
+const AuditLogsPage = lazy(() => import('@/pages/admin/AuditLogsPage'))
+const SystemHealthPage = lazy(() => import('@/pages/admin/SystemHealthPage'))
 
 function PageLoader() {
   return (
@@ -90,6 +94,11 @@ export default function App() {
                 <Route path="/analytics" element={
                   <Suspense fallback={<PageLoader />}><AnalyticsPage /></Suspense>
                 } />
+                <Route path="/earnings" element={
+                  <RoleRoute allowedRoles={['DEALER', 'ADMIN']}>
+                    <Suspense fallback={<PageLoader />}><EarningsPage /></Suspense>
+                  </RoleRoute>
+                } />
                 <Route path="/ml-insights" element={
                   <Suspense fallback={<PageLoader />}><MLInsightsPage /></Suspense>
                 } />
@@ -109,6 +118,21 @@ export default function App() {
                 <Route path="/admin/dashboard" element={
                   <AdminRoute>
                     <Suspense fallback={<PageLoader />}><AdminDashboardPage /></Suspense>
+                  </AdminRoute>
+                } />
+                <Route path="/admin/finance" element={
+                  <AdminRoute>
+                    <Suspense fallback={<PageLoader />}><FinancePage /></Suspense>
+                  </AdminRoute>
+                } />
+                <Route path="/admin/audit-logs" element={
+                  <AdminRoute>
+                    <Suspense fallback={<PageLoader />}><AuditLogsPage /></Suspense>
+                  </AdminRoute>
+                } />
+                <Route path="/admin/system-health" element={
+                  <AdminRoute>
+                    <Suspense fallback={<PageLoader />}><SystemHealthPage /></Suspense>
                   </AdminRoute>
                 } />
               </Route>

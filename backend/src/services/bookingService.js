@@ -204,6 +204,11 @@ async function transitionStatus({ bookingId, newStatus, notes, userId, userRole 
     }
 
     return b;
+  }, {
+    // Production-like Neon latency can exceed Prisma defaults under concurrent dashboard polling.
+    // Give status transitions enough headroom instead of failing with 500.
+    maxWait: 10_000,
+    timeout: 20_000,
   });
 
   logger.info(`Booking ${bookingId}: ${booking.status} → ${newStatus} by user ${userId}`);

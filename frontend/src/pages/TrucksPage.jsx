@@ -357,6 +357,20 @@ export default function TrucksPage() {
     onSuccess: () => { toast.success('Truck deleted'); qc.invalidateQueries({ queryKey: ['trucks'] }) },
     onError: (err) => toast.error(err.response?.data?.message || 'Delete failed'),
   })
+  const maintenanceMutation = useMutation({
+    mutationFn: ({ id, status }) => {
+      const availability = status === 'AVAILABLE'
+      return trucksService.update(id, { status, availability })
+    },
+    onSuccess: (_, vars) => {
+      toast.success(`Truck marked as ${vars.status}`)
+      qc.invalidateQueries({ queryKey: ['trucks'] })
+      qc.invalidateQueries({ queryKey: ['truck-profit-opportunities'] })
+      qc.invalidateQueries({ queryKey: ['truck-shipment-matches'] })
+      qc.invalidateQueries({ queryKey: ['analytics'] })
+    },
+    onError: (err) => toast.error(err.response?.data?.message || 'Status update failed'),
+  })
 
   const trucks = (data?.trucks || data?.data || []).map(normalizeTruck).filter((t) => {
     const matchSearch = !search || t.registrationNumber.toLowerCase().includes(search.toLowerCase())
@@ -604,6 +618,21 @@ export default function TrucksPage() {
                 {isDealer && (
                   <Button size="xs" variant="ghost" onClick={() => setGpsTruck(truck)}>
                     <Navigation className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+                {isDealer && (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const nextStatus = truck.status === 'MAINTENANCE' ? 'AVAILABLE' : 'MAINTENANCE'
+                      maintenanceMutation.mutate({ id: truck.id, status: nextStatus })
+                    }}
+                    loading={maintenanceMutation.isPending}
+                    title={truck.status === 'MAINTENANCE' ? 'Set Available' : 'Set Maintenance'}
+                  >
+                    {truck.status === 'MAINTENANCE' ? 'Set Available' : 'Set Maintenance'}
                   </Button>
                 )}
                 {isAdmin && (

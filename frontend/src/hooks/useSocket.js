@@ -46,13 +46,18 @@ export function useSocket() {
         toast(`Booking updated: ${data.status}`, { icon: '📦' })
       }
     }
+    const handleBookingRequested = (data) => {
+      invalidateRealtimeData()
+      const route = data?.shipmentId ? `shipment ${String(data.shipmentId).slice(0, 8)}` : 'new shipment'
+      toast(`New booking request received for ${route}`, { icon: '📦' })
+    }
 
     const handleTrackingEvent = () => {
       invalidateRealtimeData()
     }
 
     socket.on('notification:new', handleNotification)
-    socket.on('booking:requested', handleBookingEvent)
+    socket.on('booking:requested', handleBookingRequested)
     socket.on('booking:statusUpdate', handleBookingEvent)
     socket.on('tracking:update', handleTrackingEvent)
     socket.on('truck:location', handleTrackingEvent)
@@ -63,7 +68,7 @@ export function useSocket() {
 
     return () => {
       socket.off('notification:new', handleNotification)
-      socket.off('booking:requested', handleBookingEvent)
+      socket.off('booking:requested', handleBookingRequested)
       socket.off('booking:statusUpdate', handleBookingEvent)
       socket.off('tracking:update', handleTrackingEvent)
       socket.off('truck:location', handleTrackingEvent)

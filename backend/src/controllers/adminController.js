@@ -1,5 +1,6 @@
 const { prisma } = require('../config/db');
 const logger = require('../config/logger');
+const mlService = require('../services/mlService');
 
 async function getAllUsers(req, res, next) {
     try {
@@ -119,4 +120,180 @@ async function deleteUser(req, res, next) {
     }
 }
 
-module.exports = { getAllUsers, getUser, updateUserRole, toggleUserActive, deleteUser };
+function monthLabel(date) {
+    return new Date(date).toLocaleString('en-US', { month: 'short', year: 'numeric' });
+}
+
+async function getFinanceSummary(req, res, next) {
+    try {
+        const [invoices, deliveredBookings] = await Promise.all([
+            prisma.invoice.findMany({
+                select: { status: true, pricing: true, issuedAt: true, paidAt: true, dueDate: true },
+            }),
+            prisma.booking.findMany({
+                where: { status: 'DELIVERED' },
+                select: { deliveredAt: true, pricing: true, invoice: { select: { pricing: true } } },
+            }),
+        ]);
+
+        const totalRevenue = deliveredBookings.reduce((sum, b) => {
+            const pricing = b?.pricing || b?.invoice?.pricing || {};
+            const value = Number(pricing.total ?? pricing.grandTotal ?? 0);
+            return sum + (Number.isFinite(value) ? value : 0);
+        }, 0);
+
+        const now = new Date();
+        const pendingInvoices = invoices.filter((i) => i.status === 'PENDING').length;
+        const overdueInvoices = invoices.filter((i) => i.status === 'OVERDUE' || (i.status === 'PENDING' && i.dueDate && i.dueDate < now)).length;
+        const paidInvoices = invoices.filter((i) => i.status === 'PAID').length;
+
+        const monthlyRevenueMap = new Map();
+        deliveredBookings.forEach((b) => {
+            if (!b.deliveredAt) return;
+            const key = monthLabel(b.deliveredAt);
+            const pricing = b?.pricing || b?.invoice?.pricing || {};
+            const value = Number(pricing.total ?? pricing.grandTotal ?? 0);
+            monthlyRevenueMap.set(key, (monthlyRevenueMap.get(key) || 0) + (Number.isFinite(value) ? value : 0));
+        });
+        const monthlyRevenue = Array.from(monthlyRevenueMap.entries()).map(([month, revenue]) => ({
+            month,
+            revenue: Number(revenue.toFixed(2)),
+        }));
+
+        res.json({
+            success: true,
+            summary: {
+                totalRevenue: Number(totalRevenue.toFixed(2)),
+                pendingInvoices,
+                overdueInvoices,
+                paidInvoices,
+                deliveredBookings: deliveredBookings.length,
+            },
+            monthlyRevenue,
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getAuditLogs(req, res, next) {
+    try {
+        const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
+
+        const [recentUsers, recentBookings, recentShipments, recentInvoices] = await Promise.all([
+            prisma.user.findMany({
+                take: limit,
+                orderBy: { updatedAt: 'desc' },
+                select: { id: true, name: true, email: true, role: true, isActive: true, createdAt: true, updatedAt: true },
+            }),
+            prisma.booking.findMany({
+                take: limit,
+                orderBy: { updatedAt: 'desc' },
+                select: { id: true, status: true, updatedAt: true, warehouse: { select: { name: true } }, dealer: { select: { name: true } } },
+            }),
+            prisma.shipment.findMany({
+                take: limit,
+                orderBy: { updatedAt: 'desc' },
+                select: { id: true, status: true, updatedAt: true, warehouse: { select: { name: true } } },
+            }),
+            prisma.invoice.findMany({
+                take: limit,
+                orderBy: { issuedAt: 'desc' },
+                select: { id: true, invoiceNo: true, status: true, issuedAt: true, paidAt: true },
+            }),
+        ]);
+
+        const logs = [
+            ...recentUsers.map((u) => ({
+                id: `user-${u.id}-${u.updatedAt.toISOString()}`,
+                timestamp: u.updatedAt,
+                category: 'USER',
+                action: u.createdAt.getTime() === u.updatedAt.getTime() ? 'CREATED' : 'UPDATED',
+                actor: 'ADMIN_OR_SYSTEM',
+                subject: `${u.name} (${u.email})`,
+                details: `Role: ${u.role} · Active: ${u.isActive}`,
+            })),
+            ...recentBookings.map((b) => ({
+                id: `booking-${b.id}-${b.updatedAt.toISOString()}`,
+                timestamp: b.updatedAt,
+                category: 'BOOKING',
+                action: 'STATUS_CHANGED',
+                actor: 'DEALER_OR_WAREHOUSE_OR_ADMIN',
+                subject: `Booking ${b.id.slice(0, 8)}`,
+                details: `Status: ${b.status} · Warehouse: ${b.warehouse?.name || '—'} · Dealer: ${b.dealer?.name || '—'}`,
+            })),
+            ...recentShipments.map((s) => ({
+                id: `shipment-${s.id}-${s.updatedAt.toISOString()}`,
+                timestamp: s.updatedAt,
+                category: 'SHIPMENT',
+                action: 'STATUS_CHANGED',
+                actor: 'WAREHOUSE_OR_ADMIN',
+                subject: `Shipment ${s.id.slice(0, 8)}`,
+                details: `Status: ${s.status} · Warehouse: ${s.warehouse?.name || '—'}`,
+            })),
+            ...recentInvoices.map((i) => ({
+                id: `invoice-${i.id}-${(i.paidAt || i.issuedAt).toISOString()}`,
+                timestamp: i.paidAt || i.issuedAt,
+                category: 'INVOICE',
+                action: i.paidAt ? 'PAID' : 'ISSUED',
+                actor: 'ADMIN_OR_SYSTEM',
+                subject: i.invoiceNo || `Invoice ${i.id.slice(0, 8)}`,
+                details: `Status: ${i.status}`,
+            })),
+        ]
+            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+            .slice(0, limit);
+
+        res.json({ success: true, logs });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getSystemHealth(req, res, next) {
+    try {
+        const startedAt = Date.now();
+        await prisma.$queryRaw`SELECT 1`;
+        const dbLatencyMs = Date.now() - startedAt;
+
+        const memory = process.memoryUsage();
+        const mlCircuit = mlService.getCircuitStatus();
+        const mlMetrics = mlService.getMetricsSummary();
+
+        res.json({
+            success: true,
+            health: {
+                service: 'freightzeb-api',
+                uptimeSec: Math.round(process.uptime()),
+                nodeVersion: process.version,
+                db: {
+                    status: 'UP',
+                    latencyMs: dbLatencyMs,
+                },
+                memory: {
+                    rssMb: Number((memory.rss / 1024 / 1024).toFixed(1)),
+                    heapUsedMb: Number((memory.heapUsed / 1024 / 1024).toFixed(1)),
+                    heapTotalMb: Number((memory.heapTotal / 1024 / 1024).toFixed(1)),
+                },
+                ml: {
+                    circuit: mlCircuit,
+                    metrics: mlMetrics,
+                },
+                checkedAt: new Date().toISOString(),
+            },
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+module.exports = {
+    getAllUsers,
+    getUser,
+    updateUserRole,
+    toggleUserActive,
+    deleteUser,
+    getFinanceSummary,
+    getAuditLogs,
+    getSystemHealth,
+};
